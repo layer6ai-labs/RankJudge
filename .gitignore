@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+*.egg
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Project outputs
+outputs/
+logs/
+data/
+models/
+release/
+paper/
+wandb/
+mlruns/
+*.log
+
+# Archive
+archive/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Secrets
+.env
+api_key.json

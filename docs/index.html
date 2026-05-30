@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Primary Meta Tags -->
+  <meta name="title" content="RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator">
+  <meta name="description" content="A benchmark generator for evaluating LLM judges on multi-turn, reference-grounded conversations. 21 frontier LLM judges evaluated across machine learning, biomedicine, and finance.">
+  <meta name="keywords" content="LLM-as-a-judge, benchmark, multi-turn evaluation, Bradley-Terry, conversation quality, machine learning, NeurIPS 2026, Layer 6 AI">
+  <meta name="author" content="Zhenwei Tang, Zhaoyan Liu, Rasa Hosseinzadeh, Tongzi Wu, Keyvan Golestan, Jesse C. Cresswell">
+  <meta name="robots" content="index, follow">
+  <meta name="language" content="English">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Layer 6 AI">
+  <meta property="og:title" content="RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator">
+  <meta property="og:description" content="A benchmark generator for evaluating LLM judges on multi-turn, reference-grounded conversations across machine learning, biomedicine, and finance.">
+  <meta property="og:url" content="https://layer6ai-labs.github.io/RankJudge/">
+  <meta property="og:image" content="https://layer6ai-labs.github.io/RankJudge/static/images/overview.png">
+  <meta property="og:image:alt" content="RankJudge overview diagram">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator">
+  <meta name="twitter:description" content="A benchmark generator for evaluating LLM judges on multi-turn, reference-grounded conversations across machine learning, biomedicine, and finance.">
+  <meta name="twitter:image" content="https://layer6ai-labs.github.io/RankJudge/static/images/overview.png">
+  <meta name="twitter:image:alt" content="RankJudge overview diagram">
+
+  <!-- Academic/Research Specific -->
+  <meta name="citation_title" content="RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator">
+  <meta name="citation_author" content="Tang, Zhenwei">
+  <meta name="citation_author" content="Liu, Zhaoyan">
+  <meta name="citation_author" content="Hosseinzadeh, Rasa">
+  <meta name="citation_author" content="Wu, Tongzi">
+  <meta name="citation_author" content="Golestan, Keyvan">
+  <meta name="citation_author" content="Cresswell, Jesse C.">
+  <meta name="citation_publication_date" content="2026">
+  <meta name="citation_pdf_url" content="https://layer6ai-labs.github.io/RankJudge/static/pdfs/rankjudge.pdf">
+
+  <meta name="theme-color" content="#43B02A">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://ajax.googleapis.com">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+
+  <title>RankJudge: Multi-Turn LLM-as-a-Judge Benchmark</title>
+
+  <link rel="icon" type="image/png" href="static/images/logo.png">
+  <link rel="apple-touch-icon" href="static/images/logo.png">
+
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/index.css">
+
+  <link rel="preload" href="static/css/bulma-carousel.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" href="static/css/bulma-slider.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" href="static/css/fontawesome.all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+
+  <noscript>
+    <link rel="stylesheet" href="static/css/bulma-carousel.min.css">
+    <link rel="stylesheet" href="static/css/bulma-slider.min.css">
+    <link rel="stylesheet" href="static/css/fontawesome.all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  </noscript>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <script defer src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="static/js/fontawesome.all.min.js"></script>
+  <script defer src="static/js/bulma-carousel.min.js"></script>
+  <script defer src="static/js/bulma-slider.min.js"></script>
+  <script defer src="static/js/index.js"></script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "ScholarlyArticle",
+    "headline": "RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator",
+    "description": "A benchmark generator for evaluating LLM judges on multi-turn, reference-grounded conversations across machine learning, biomedicine, and finance.",
+    "author": [
+      {"@type": "Person", "name": "Zhenwei Tang", "affiliation": {"@type": "Organization", "name": "Layer 6 AI"}},
+      {"@type": "Person", "name": "Zhaoyan Liu", "affiliation": {"@type": "Organization", "name": "Layer 6 AI"}},
+      {"@type": "Person", "name": "Rasa Hosseinzadeh", "affiliation": {"@type": "Organization", "name": "Layer 6 AI"}},
+      {"@type": "Person", "name": "Tongzi Wu", "affiliation": {"@type": "Organization", "name": "Layer 6 AI"}},
+      {"@type": "Person", "name": "Keyvan Golestan", "affiliation": {"@type": "Organization", "name": "Layer 6 AI"}},
+      {"@type": "Person", "name": "Jesse C. Cresswell", "affiliation": {"@type": "Organization", "name": "Layer 6 AI"}}
+    ],
+    "datePublished": "2026",
+    "publisher": {"@type": "Organization", "name": "Layer 6 AI"},
+    "url": "https://layer6ai-labs.github.io/RankJudge/",
+    "image": "https://layer6ai-labs.github.io/RankJudge/static/images/overview.png",
+    "keywords": ["LLM-as-a-judge", "benchmark", "multi-turn evaluation", "Bradley-Terry", "machine learning"]
+  }
+  </script>
+</head>
+<body>
+
+  <button class="scroll-to-top" onclick="scrollToTop()" title="Scroll to top" aria-label="Scroll to top">
+    <i class="fas fa-chevron-up"></i>
+  </button>
+
+  <main id="main-content">
+  <section class="hero">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered">
+          <div class="column has-text-centered">
+            <a href="https://layer6.ai/" target="_blank" class="layer6-logo-link" aria-label="Layer 6 AI at TD">
+              <img src="static/images/layer6-logo.svg" alt="Layer 6 AI at TD" class="layer6-logo"/>
+            </a>
+            <h1 class="title is-1 publication-title"><strong>RankJudge</strong><span class="publication-subtitle">: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator</span></h1>
+            <div class="is-size-5 publication-authors">
+              <span class="author-block"><a href="mailto:joseph@layer6.ai">Zhenwei Tang</a>,</span>
+              <span class="author-block"><a href="mailto:zhaoyan@layer6.ai">Zhaoyan Liu</a>,</span>
+              <span class="author-block"><a href="mailto:Rasa@layer6.ai">Rasa Hosseinzadeh</a>,</span>
+              <span class="author-block"><a href="mailto:tongzi@layer6.ai">Tongzi Wu</a></span>
+            </div>
+            <div class="is-size-5 publication-authors">
+              <span class="author-block"><a href="mailto:keyvan@layer6.ai">Keyvan Golestan</a>,</span>
+              <span class="author-block"><a href="mailto:jesse@layer6.ai">Jesse C. Cresswell</a></span>
+            </div>
+
+            <div class="is-size-5 publication-authors">
+              <span class="author-block"><a href="https://layer6.ai/" target="_blank">Layer 6 AI</a>, Toronto, Canada</span>
+            </div>
+
+            <div class="column has-text-centered">
+              <div class="publication-links">
+
+                <span class="link-block">
+                  <a href="https://arxiv.org/abs/2605.21748" target="_blank"
+                  class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                    <i class="ai ai-arxiv"></i>
+                  </span>
+                  <span>arXiv</span>
+                </a>
+                </span>
+
+                <span class="link-block">
+                  <a href="https://github.com/layer6ai-labs/RankJudge" target="_blank"
+                  class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                    <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code</span>
+                </a>
+                </span>
+
+                <span class="link-block">
+                  <a href="https://huggingface.co/datasets/Layer6/RankJudge" target="_blank"
+                  class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                    <i class="fas fa-database"></i>
+                  </span>
+                  <span>Dataset</span>
+                </a>
+                </span>
+
+                <span class="link-block">
+                  <a href="#BibTeX"
+                  class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                    <i class="fas fa-quote-right"></i>
+                  </span>
+                  <span>BibTeX</span>
+                </a>
+                </span>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- Teaser figure -->
+  <section class="hero teaser">
+    <div class="container is-max-desktop">
+      <div class="hero-body">
+        <img src="static/images/overview.png" alt="Overview of RankJudge: a generator that produces paired multi-turn conversations with a single flaw injected, then ranks LLM judges by joint correctness."/>
+        <h2 class="subtitle has-text-centered">
+          <strong>RankJudge</strong> generates pairs of multi-turn, document-grounded conversations where one conversation has a single flaw injected into one turn. Pairs carry an unambiguous better/worse label and isolate failure types to individual turns.
+        </h2>
+      </div>
+    </div>
+  </section>
+  <!-- End teaser figure -->
+
+
+  <!-- Abstract -->
+  <section class="section hero is-light">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3">Abstract</h2>
+          <div class="content has-text-justified">
+            <p>
+              As interactive LLM-based applications are created and refined, model developers need to evaluate the quality of generated text along many possible axes. For simpler systems, human evaluation may be practical, but in complicated systems like conversational chatbots, the amount of generated text can overwhelm human annotation resources. Model developers have begun to rely heavily on auto-evaluation, where LLMs are also used to judge generation quality. However, existing LLM-as-a-judge benchmarks largely focus on simple Q&amp;A tasks that do not match the complexity of multi-turn conversations. We introduce <strong>RankJudge</strong>, a benchmark generator for evaluating LLM-as-a-judge on multi-turn conversations grounded in reference documents. RankJudge creates pairs of conversations where one conversation has a single flaw injected into one turn. This construction allows paired conversations to be labeled unambiguously as better or worse, and precisely isolates failure categories to individual turns, enabling a strict joint correctness criterion for judging. We implement RankJudge across the domains of machine learning, biomedicine, and finance, evaluate <strong>21 frontier LLM judges</strong>, and rank those judges via the Bradley-Terry model. Our formulation also allows ranking each conversation pair with difficulty ratings, which we use to dynamically curate the evaluation slice to reduce label noise, as confirmed via human annotation. We find that judge rankings are stable under partial observability, coarser correctness criteria, and an alternative random-walk rating algorithm.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- End abstract -->
+
+
+  <!-- Key contributions -->
+  <section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3 has-text-centered">What's new</h2>
+          <div class="content">
+            <ul>
+              <li><strong>Multi-turn, reference-grounded benchmark generator.</strong> Ground-truth verdict, flawed turn, and failure type are specified in the generation prompt and scored under a strict joint correctness criterion.</li>
+              <li><strong>Dual-conditioned generation.</strong> User behavior and assistant failure axes are independently controlled; a semi-automated discovery loop surfaces new failure types.</li>
+              <li><strong>Fully synthetic construction with quality gates.</strong> A three-layer automated verifier (coherence / adherence / grounding) plus Elo-based curation of the difficult tail, validated by human audit and held-out fine-tuning.</li>
+              <li><strong>Three domain instantiations.</strong> Machine Learning, Biomedicine, and Finance, spanning 21 proprietary and open-weight judges. Leaderboards are stable under subsampling and alternative ranking algorithms.</li>
+              <li><strong>Surfaces systematic class bias.</strong> Weaker judges collapse predictions onto a single failure category, exposing capability gaps that prompting alone cannot close.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- End contributions -->
+
+
+  <!-- Interactive leaderboard -->
+  <section class="section" id="leaderboard">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Leaderboard</h2>
+      <p class="has-text-centered is-size-6 leaderboard-subtitle">
+        Bradley-Terry Elo of 21 LLM judges with 95% confidence interval. Click any column header to sort; filter by type or search by name. Best per column highlighted in green.
+      </p>
+
+      <div class="leaderboard-toolbar">
+        <div class="leaderboard-search">
+          <input type="search" id="lb-search" placeholder="Search judges…" aria-label="Search judges"/>
+        </div>
+        <div class="leaderboard-filter" role="group" aria-label="Filter by judge type">
+          <button class="lb-filter-btn is-active" data-filter="all">All <span class="lb-count">(21)</span></button>
+          <button class="lb-filter-btn" data-filter="Prop.">Proprietary <span class="lb-count">(10)</span></button>
+          <button class="lb-filter-btn" data-filter="Open">Open <span class="lb-count">(11)</span></button>
+        </div>
+      </div>
+
+      <div class="leaderboard-table-wrap">
+        <table class="leaderboard-table" id="lb-table">
+          <thead>
+            <tr>
+              <th class="lb-rank">#</th>
+              <th class="lb-judge" data-sort="judge">Judge <span class="lb-arrow"></span></th>
+              <th class="lb-num lb-sorted-desc" data-sort="all">All <span class="lb-arrow">▼</span></th>
+              <th class="lb-num" data-sort="ml">ML <span class="lb-arrow"></span></th>
+              <th class="lb-num" data-sort="med">Med <span class="lb-arrow"></span></th>
+              <th class="lb-num" data-sort="fin">Fin <span class="lb-arrow"></span></th>
+              <th class="lb-type" data-sort="type">Type <span class="lb-arrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="lb-body"></tbody>
+        </table>
+      </div>
+      <p class="has-text-centered is-size-7 leaderboard-footnote">
+        Source: Table 1 in the paper. Elo is dimensionless and meaningful only as a ranking; ±values are 95% CIs from bootstrapping.
+      </p>
+    </div>
+  </section>
+
+  <script>
+    const LEADERBOARD_DATA = [
+      {judge:"gemini-3.1-pro",        all:1959, all_ci:80,  ml:1992, ml_ci:156, med:1910, med_ci:131, fin:1933, fin_ci:129, type:"Prop."},
+      {judge:"gpt-5.5",               all:1867, all_ci:65,  ml:1854, ml_ci:109, med:1852, med_ci:119, fin:1850, fin_ci:107, type:"Prop."},
+      {judge:"gemini-3-flash",        all:1724, all_ci:49,  ml:1665, ml_ci:81,  med:1759, med_ci:93,  fin:1713, fin_ci:83,  type:"Prop."},
+      {judge:"kimi-k2.6",             all:1713, all_ci:54,  ml:1743, ml_ci:99,  med:1732, med_ci:93,  fin:1634, fin_ci:89,  type:"Open"},
+      {judge:"sonnet-4.6",            all:1706, all_ci:49,  ml:1755, ml_ci:88,  med:1707, med_ci:90,  fin:1624, fin_ci:80,  type:"Prop."},
+      {judge:"gemma-4-31b",           all:1695, all_ci:47,  ml:1708, ml_ci:81,  med:1671, med_ci:87,  fin:1662, fin_ci:76,  type:"Open"},
+      {judge:"qwen3.6-plus",          all:1671, all_ci:51,  ml:1665, ml_ci:88,  med:1719, med_ci:103, fin:1597, fin_ci:79,  type:"Prop."},
+      {judge:"glm-5.1",               all:1637, all_ci:47,  ml:1665, ml_ci:87,  med:1671, med_ci:89,  fin:1546, fin_ci:73,  type:"Open"},
+      {judge:"gpt-5.4",               all:1631, all_ci:54,  ml:1581, ml_ci:90,  med:1617, med_ci:83,  fin:1653, fin_ci:99,  type:"Prop."},
+      {judge:"qwen3.5-397b-a17b",     all:1571, all_ci:43,  ml:1590, ml_ci:74,  med:1597, med_ci:80,  fin:1490, fin_ci:72,  type:"Open"},
+      {judge:"opus-4.7",              all:1510, all_ci:43,  ml:1523, ml_ci:75,  med:1587, med_ci:82,  fin:1395, fin_ci:71,  type:"Prop."},
+      {judge:"haiku-4.5",             all:1505, all_ci:47,  ml:1492, ml_ci:80,  med:1487, med_ci:78,  fin:1490, fin_ci:82,  type:"Prop."},
+      {judge:"gemma-4-26b-a4b",       all:1444, all_ci:42,  ml:1428, ml_ci:70,  med:1487, med_ci:75,  fin:1380, fin_ci:74,  type:"Open"},
+      {judge:"qwen3.5-122b-a10b",     all:1422, all_ci:37,  ml:1381, ml_ci:60,  med:1454, med_ci:68,  fin:1395, fin_ci:62,  type:"Open"},
+      {judge:"qwen3.5-35b-a3b",       all:1373, all_ci:38,  ml:1349, ml_ci:65,  med:1471, med_ci:73,  fin:1272, fin_ci:63,  type:"Open"},
+      {judge:"gpt-5.4-mini",          all:1342, all_ci:37,  ml:1343, ml_ci:62,  med:1363, med_ci:73,  fin:1279, fin_ci:61,  type:"Prop."},
+      {judge:"deepseek-v3.2",         all:1307, all_ci:43,  ml:1260, ml_ci:69,  med:1370, med_ci:85,  fin:1259, fin_ci:72,  type:"Open"},
+      {judge:"minimax-m2.7",          all:1184, all_ci:40,  ml:1119, ml_ci:68,  med:1313, med_ci:70,  fin:1094, fin_ci:70,  type:"Open"},
+      {judge:"mistral-small-4-119b",  all:906,  all_ci:42,  ml:887,  ml_ci:68,  med:873,  med_ci:80,  fin:911,  fin_ci:76,  type:"Open"},
+      {judge:"gpt-oss-120b",          all:867,  all_ci:42,  ml:842,  ml_ci:67,  med:911,  med_ci:72,  fin:805,  fin_ci:80,  type:"Open"},
+      {judge:"gpt-oss-20b",           all:762,  all_ci:45,  ml:734,  ml_ci:73,  med:812,  med_ci:81,  fin:697,  fin_ci:81,  type:"Open"},
+    ];
+
+    (function() {
+      const tbody = document.getElementById('lb-body');
+      const headers = document.querySelectorAll('#lb-table th[data-sort]');
+      const searchInput = document.getElementById('lb-search');
+      const filterBtns = document.querySelectorAll('.lb-filter-btn');
+
+      const bestPerCol = {
+        all: Math.max(...LEADERBOARD_DATA.map(d => d.all)),
+        ml:  Math.max(...LEADERBOARD_DATA.map(d => d.ml)),
+        med: Math.max(...LEADERBOARD_DATA.map(d => d.med)),
+        fin: Math.max(...LEADERBOARD_DATA.map(d => d.fin)),
+      };
+
+      const rankByAll = {};
+      [...LEADERBOARD_DATA].sort((a,b) => b.all - a.all).forEach((d,i) => { rankByAll[d.judge] = i + 1; });
+
+      let state = { sortKey: 'all', sortDir: 'desc', filter: 'all', query: '' };
+
+      function fmtCell(v, ci, isBest) {
+        const cls = isBest ? 'lb-cell lb-best' : 'lb-cell';
+        return `<td class="${cls}"><span class="lb-val">${v}</span><span class="lb-ci">±${ci}</span></td>`;
+      }
+
+      function render() {
+        let rows = LEADERBOARD_DATA.slice();
+        if (state.filter !== 'all') rows = rows.filter(r => r.type === state.filter);
+        if (state.query) {
+          const q = state.query.toLowerCase();
+          rows = rows.filter(r => r.judge.toLowerCase().includes(q));
+        }
+        rows.sort((a, b) => {
+          const av = a[state.sortKey], bv = b[state.sortKey];
+          if (typeof av === 'string') {
+            return state.sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+          }
+          return state.sortDir === 'asc' ? av - bv : bv - av;
+        });
+
+        tbody.innerHTML = rows.map(r => {
+          const typeClass = r.type === 'Prop.' ? 'lb-badge lb-badge-prop' : 'lb-badge lb-badge-open';
+          const typeLabel = r.type === 'Prop.' ? 'Proprietary' : 'Open';
+          return `<tr>
+            <td class="lb-rank-cell">${rankByAll[r.judge]}</td>
+            <td class="lb-judge-cell"><code>${r.judge}</code></td>
+            ${fmtCell(r.all, r.all_ci, r.all === bestPerCol.all)}
+            ${fmtCell(r.ml,  r.ml_ci,  r.ml  === bestPerCol.ml)}
+            ${fmtCell(r.med, r.med_ci, r.med === bestPerCol.med)}
+            ${fmtCell(r.fin, r.fin_ci, r.fin === bestPerCol.fin)}
+            <td><span class="${typeClass}">${typeLabel}</span></td>
+          </tr>`;
+        }).join('');
+
+        headers.forEach(th => {
+          th.classList.remove('lb-sorted-asc', 'lb-sorted-desc');
+          const arrow = th.querySelector('.lb-arrow');
+          if (arrow) arrow.textContent = '';
+          if (th.dataset.sort === state.sortKey) {
+            th.classList.add(state.sortDir === 'asc' ? 'lb-sorted-asc' : 'lb-sorted-desc');
+            if (arrow) arrow.textContent = state.sortDir === 'asc' ? '▲' : '▼';
+          }
+        });
+      }
+
+      headers.forEach(th => {
+        th.addEventListener('click', () => {
+          const key = th.dataset.sort;
+          if (state.sortKey === key) {
+            state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+          } else {
+            state.sortKey = key;
+            state.sortDir = (key === 'judge' || key === 'type') ? 'asc' : 'desc';
+          }
+          render();
+        });
+      });
+
+      searchInput.addEventListener('input', (e) => {
+        state.query = e.target.value;
+        render();
+      });
+
+      filterBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          filterBtns.forEach(b => b.classList.remove('is-active'));
+          btn.classList.add('is-active');
+          state.filter = btn.dataset.filter;
+          render();
+        });
+      });
+
+      render();
+    })();
+  </script>
+  <!-- End leaderboard -->
+
+
+  <!-- Results section -->
+  <section class="section hero is-light">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Results</h2>
+
+      <div class="columns is-centered">
+        <div class="column">
+          <figure class="image">
+            <img src="static/images/judge_scores.png" alt="Bradley-Terry Elo ranking of 21 LLM judges across combined and per-domain slices."/>
+          </figure>
+          <p class="has-text-centered is-size-6 mt-3">
+            <strong>21-judge leaderboard.</strong> Bradley-Terry Elo sorted by combined performance; black circles give the combined Elo with 95% CI, colored markers show per-domain Elo. Blue tick labels are proprietary judges; orange are open-source.
+          </p>
+        </div>
+      </div>
+
+      <div class="columns is-centered mt-6">
+        <div class="column">
+          <figure class="image">
+            <img src="static/images/class_bias.png" alt="Per-class prediction bias for each judge: heatmap of predicted minus ground-truth failure-type share."/>
+          </figure>
+          <p class="has-text-centered is-size-6 mt-3">
+            <strong>Per-class prediction bias.</strong> Each cell shows the difference between the judge's predicted share of a failure type and its ground-truth share, in percentage points; red is over-prediction, blue is under-prediction. Weaker judges collapse onto a single category.
+          </p>
+        </div>
+      </div>
+
+      <div class="columns is-centered mt-6">
+        <div class="column">
+          <figure class="image">
+            <img src="static/images/label_noise.png" alt="Label noise concentrates at the top of the difficulty distribution; fine-tuning on the top-20% slice underperforms training on cleaner slices."/>
+          </figure>
+          <p class="has-text-centered is-size-6 mt-3">
+            <strong>Difficulty-based curation reduces label noise.</strong> Left: cumulative fraction of Noise / Ambiguous annotations among pairs with BT-Elo ≤ x. Noise concentrates at the top of the difficulty distribution. Right: fine-tuning Qwen3.5-4B on the top-20% slice underperforms training on cleaner slices.
+          </p>
+        </div>
+      </div>
+
+      <div class="columns is-centered mt-6">
+        <div class="column">
+          <figure class="image">
+            <img src="static/images/type_mitigation_sample.png" alt="Three ablations: failure-type criterion impact, prompt-revision Pareto frontier, and subsampling rank correlation."/>
+          </figure>
+          <p class="has-text-centered is-size-6 mt-3">
+            <strong>Ranking robustness.</strong> (a) Judge Elo with vs. without failure-type correctness in the loss. (b) Accuracy vs. mean completion tokens for four default-prompt baselines and four opus-4.7 prompt revisions; the dashed step is the empirical Pareto frontier. (c) Rank correlation between the full-sample ranking and rankings recomputed on uniform subsamples. Rankings stay stable under partial observability.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- End results -->
+
+
+  <!-- BibTeX -->
+  <section class="section" id="BibTeX">
+    <div class="container is-max-desktop content">
+      <div class="bibtex-header">
+        <h2 class="title">BibTeX</h2>
+        <button class="copy-bibtex-btn" onclick="copyBibTeX()" title="Copy BibTeX to clipboard">
+          <i class="fas fa-copy"></i>
+          <span class="copy-text">Copy</span>
+        </button>
+      </div>
+      <pre id="bibtex-code"><code>@article{tang2026rankjudge,
+  title={RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator},
+  author={Tang, Zhenwei and Liu, Zhaoyan and Hosseinzadeh, Rasa and Wu, Tongzi and Golestan, Keyvan and Cresswell, Jesse C},
+  journal={arXiv preprint arXiv:2605.21748},
+  year={2026}
+}</code></pre>
+    </div>
+  </section>
+  <!-- End BibTeX -->
+
+
+  <footer class="footer">
+    <div class="container">
+      <div class="columns is-centered">
+        <div class="column is-8 has-text-centered">
+          <a href="https://layer6.ai/" target="_blank" class="layer6-logo-link" aria-label="Layer 6 AI at TD">
+            <img src="static/images/layer6-logo.svg" alt="Layer 6 AI at TD" class="layer6-logo layer6-logo--footer"/>
+          </a>
+          <div class="content">
+            <p>
+              This page was built using the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank">Academic Project Page Template</a> which was adopted from the <a href="https://nerfies.github.io" target="_blank">Nerfies</a> project page.
+              You are free to borrow the source code of this website, we just ask that you link back to this page in the footer. <br> This website is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/" target="_blank">Creative
+              Commons Attribution-ShareAlike 4.0 International License</a>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+  </main>
+
+</body>
+</html>
