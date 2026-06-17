@@ -1,3 +1,7 @@
+<p align="center">
+<a href="https://layer6.ai/"><img src="https://github.com/layer6ai-labs/DropoutNet/blob/master/logs/logobox.jpg" width="180"></a>
+</p>
+
 # RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator
 
 [![Leaderboard](https://img.shields.io/badge/Leaderboard-github.io-green?link=https://layer6ai-labs.github.io/RankJudge/)](https://layer6ai-labs.github.io/RankJudge/)
@@ -147,7 +151,11 @@ The `--` separator passes flags to the script rather than to Streamlit. Mode A h
 @article{tang2026rankjudge,
   title={RankJudge: A Multi-Turn LLM-as-a-Judge Synthetic Benchmark Generator},
   author={Tang, Zhenwei and Liu, Zhaoyan and Hosseinzadeh, Rasa and Wu, Tongzi and Golestan, Keyvan and Cresswell, Jesse C},
-  journal={arXiv preprint arXiv:2605.21748},
+  journal={arXiv:2605.21748},
   year={2026}
 }
 ```
+
+## License
+
+This data and code is licensed under the MIT License, copyright by Layer 6 AI.
