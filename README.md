@@ -4,7 +4,7 @@
 
 - CS 6604 Final project
 - Georgia Institute of Technology.
-**Team Member:** Siwan Yang, Ruby Yu, Siang-Yu Cheng, Wei-Po Lin
+- **Team Member:** Siwan Yang, Ruby Yu, Siang-Yu Cheng, Wei-Po Lin
 
 > Built on [RankJudge](https://github.com/layer6ai-labs/RankJudge) (Tang et al., 2026), MIT License.
 
