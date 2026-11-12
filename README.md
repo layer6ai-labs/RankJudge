@@ -6,7 +6,6 @@ Final project, Georgia Institute of Technology.
 Team: Siwan Yang, Ruby Yu, Siang-Yu Cheng, Wei-Po Lin
 
 > Built on [RankJudge](https://github.com/layer6ai-labs/RankJudge) (Tang et al., 2026), MIT License.
-> The original README is kept at [`docs/RANKJUDGE_README.md`](docs/RANKJUDGE_README.md).
 
 ---
 
