@@ -49,8 +49,6 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Run `source .venv/bin/activate` again every time you open a new terminal.
-
 ### 3. Download the data (free, no API key)
 
 ```bash
