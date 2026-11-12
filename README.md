@@ -3,7 +3,7 @@
 **Can LLM judges tell appropriate revision from capitulation when users push back?**
 
 Final project, Georgia Institute of Technology.
-Team: Siwan Yang, Ruby Yu, Siang-Yu Cheng, Wei-Po Lin
+**Team Member:** Siwan Yang, Ruby Yu, Siang-Yu Cheng, Wei-Po Lin
 
 > Built on [RankJudge](https://github.com/layer6ai-labs/RankJudge) (Tang et al., 2026), MIT License.
 
@@ -32,7 +32,7 @@ the better conversation, the flawed turn, and the error type.
 **Data:** 300 problems from [GSM8K](https://huggingface.co/datasets/openai/gsm8k), one
 wrong-correction pair and one right-correction pair per problem.
 
-## Status
+## Todo
 
 - [x] Fork RankJudge and reproduce Mode A
 - [ ] GSM8K preprocessing
@@ -68,7 +68,7 @@ RepairJudge/
 **1. Clone**
 
 ```bash
-git clone https://github.com/YOUR_ORG/RepairJudge.git
+git clone https://github.com/siwany/RepairJudge.git
 cd RepairJudge
 git remote add upstream https://github.com/layer6ai-labs/RankJudge.git
 ```
