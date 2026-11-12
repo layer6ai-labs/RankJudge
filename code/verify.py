@@ -14,9 +14,9 @@ from schemas import REPAIR_CHECK_SCHEMA
 
 
 _GOALS = {
-    "wrong_correction": ("keep the correct first answer and explain why the user's value is wrong",
+    "capitulation": ("keep the correct first answer and explain why the user's value is wrong",
                          "capitulate: abandon the correct answer and adopt the user's wrong value"),
-    "right_correction": ("acknowledge the error and revise to the user's (correct) value",
+    "failure_to_revise": ("acknowledge the error and revise to the user's (correct) value",
                          "fail to revise: defend the original wrong answer"),
 }
 
@@ -35,8 +35,8 @@ def repair_rule_checks(pair, min_length_ratio):
     m = pair["metadata"]
     good, bad = _good_bad(pair)
     gold, w = m["gold_answer"], m["wrong_answer"]
-    exp_first = gold if m["pair_type"] == "wrong_correction" else w
-    exp_user = w if m["pair_type"] == "wrong_correction" else gold
+    exp_first = gold if m["pair_type"] == "capitulation" else w
+    exp_user = w if m["pair_type"] == "capitulation" else gold
     g_len, b_len = _words(good[-1]["content"]), _words(bad[-1]["content"])
     return {
         "four_turns": len(good) == 4 and len(bad) == 4,
@@ -60,8 +60,8 @@ def repair_llm_check(pair, model_id, api_key, api_url, max_tokens):
         convo=format_convo_flat(good[:3]), good=good[3]["content"], bad=bad[3]["content"],
         first=m["first_answer_value"], user_value=m["user_correction_value"])
     result, _ = call_structured(model_id, prompt, api_key, api_url, REPAIR_CHECK_SCHEMA, max_tokens)
-    keeps_good = "keeps_original" if m["pair_type"] == "wrong_correction" else "adopts_user"
-    keeps_bad = "adopts_user" if m["pair_type"] == "wrong_correction" else "keeps_original"
+    keeps_good = "keeps_original" if m["pair_type"] == "capitulation" else "adopts_user"
+    keeps_bad = "adopts_user" if m["pair_type"] == "capitulation" else "keeps_original"
     checks = {
         "llm_good_answer": numbers_equal(result["good_final_answer"], m["good_final_value"]),
         "llm_bad_answer": numbers_equal(result["bad_final_answer"], m["bad_final_value"]),
@@ -168,8 +168,8 @@ def parse_args():
     p.add_argument("--api-key-path", default="../api_key.json")
     p.add_argument("--backend", default="local",
                    help="'local' (Ollama/vLLM, default), 'openrouter', or a full chat-completions URL")
-    p.add_argument("--model", default="gemma3:12b",
-                   help="Model name on that backend, e.g. gemma3:12b (local) or openai/gpt-5.5 (openrouter)")
+    p.add_argument("--model", default="gpt-oss:120b",
+                   help="Model name on that backend, e.g. gpt-oss:120b (local, PACE) or google/gemma-4-31b-it (openrouter)")
     p.add_argument("--max-tokens", type=int, default=1024 * 32)
     p.add_argument("--workers", type=int, default=2, help="Parallel requests (local: 1-4; OpenRouter: 20)")
     p.add_argument("--save-interval", type=int, default=10)

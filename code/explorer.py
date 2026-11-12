@@ -1,32 +1,39 @@
-"""Streamlit per-pair explorer.
+"""Streamlit per-pair explorer. Pick the data source in the sidebar:
 
-  Mode A (default) -- the released Layer6/RankJudge dataset from Hugging Face
-                      (original RankJudge baseline; no verification records).
-  Mode B           -- our local GSM8K run: pairs.json, pairs_filtered.json,
-                      verification.json, and one matches file.
+  RankJudge (Hugging Face) -- the released Layer6/RankJudge dataset
+                              (original RankJudge baseline; no verification records).
+  outputs/<run>            -- one of our runs. Needs only pairs.json; verification.json,
+                              pairs_filtered.json and the judge matches files are shown
+                              when they exist, so pairs can be browsed before judging.
 
-Run from `code/`:
+Run from the repo root:
 
-  streamlit run explorer.py                                            # Mode A
-  streamlit run explorer.py -- --mode b --dir ../outputs/repair        # our run, dialogue condition
-  streamlit run explorer.py -- --mode b --dir ../outputs/repair --matches-file matches_gold.json
+  streamlit run code/explorer.py
+  streamlit run code/explorer.py -- --mode b --dir outputs/repair      # preselect a run
 """
 
-import argparse, json, os, re, sys
+import argparse, glob, json, os, re, sys
 
 import streamlit as st
+
+CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(CODE_DIR)
+OUTPUTS = os.path.join(ROOT, "outputs")
+sys.path.insert(0, CODE_DIR)   # metrics / utils imports work from any working directory
+HF_SOURCE = "RankJudge (Hugging Face)"
+MATCHES_FILES = {"dialogue only": "matches_dialogue.json", "with gold answer": "matches_gold.json"}
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["a", "b"], default="a",
-                   help="a: released HF dataset (default); b: local pipeline outputs")
-    p.add_argument("--dir", default="../outputs/repair",
-                   help="local pipeline dir (Mode B inputs)")
+    p.add_argument("--mode", choices=["a", "b"], default=None,
+                   help="preselect the source: a = released HF dataset, b = a local run (--dir)")
+    p.add_argument("--dir", default=None,
+                   help="local run dir to preselect, e.g. outputs/repair")
     p.add_argument("--repo", default="Layer6/RankJudge",
                    help="(Mode A) HF dataset repo id")
     p.add_argument("--split", default="train", help="(Mode A) HF split")
-    p.add_argument("--cache-dir", default="../data",
+    p.add_argument("--cache-dir", default=os.path.join(ROOT, "data"),
                    help="(Mode A) HF datasets cache dir")
     p.add_argument("--init-elo", type=int, default=1500,
                    help="(Mode B) BT anchor for the top_removed cut")
@@ -37,12 +44,24 @@ def parse_args():
     return p.parse_args(sys.argv[1:])
 
 
-MATCHES_FILE = "matches_dialogue.json"   # set from --matches-file
-
-
 def load_json(path):
     with open(path) as f:
         return json.load(f)
+
+
+def load_optional(path, default):
+    return load_json(path) if os.path.exists(path) else default
+
+
+def run_dirs():
+    """Folders under outputs/ that contain a pairs.json, newest first."""
+    found = [os.path.dirname(f) for f in glob.glob(os.path.join(OUTPUTS, "*", "pairs.json"))]
+    return sorted(found, key=os.path.getmtime, reverse=True)
+
+
+def files_signature(data_dir):
+    """Changes whenever a file in the run folder changes, so the cache reloads."""
+    return tuple(sorted((f, os.path.getmtime(f)) for f in glob.glob(os.path.join(data_dir, "*.json"))))
 
 
 def compute_top_removed_ids(matches, init_elo, top_pct):
@@ -50,6 +69,8 @@ def compute_top_removed_ids(matches, init_elo, top_pct):
     metrics.py keeps: drop trivial/incomplete pairs, then drop the top --top-pct
     by BT pair-Elo. Returns empty on any failure (e.g. missing deps)."""
     from types import SimpleNamespace
+    if not matches:
+        return set()
     try:
         from metrics import _filter_trivial_pairs, _select_top_pids
         from utils import collect_matches
@@ -61,11 +82,11 @@ def compute_top_removed_ids(matches, init_elo, top_pct):
 
 
 @st.cache_data(show_spinner=False)
-def load_local(data_dir, init_elo, top_pct):
+def load_local(data_dir, matches_file, init_elo, top_pct, signature):
     pairs = load_json(os.path.join(data_dir, "pairs.json"))
-    pairs_filtered = load_json(os.path.join(data_dir, "pairs_filtered.json"))
-    verification = load_json(os.path.join(data_dir, "verification.json"))
-    matches = load_json(os.path.join(data_dir, MATCHES_FILE))
+    pairs_filtered = load_optional(os.path.join(data_dir, "pairs_filtered.json"), pairs)
+    verification = load_optional(os.path.join(data_dir, "verification.json"), [])
+    matches = load_optional(os.path.join(data_dir, matches_file), [])
     by_pair = {}
     for m in matches:
         by_pair.setdefault(m["id"], []).append(m)
@@ -200,13 +221,15 @@ def render_sidebar(mode, pairs, pairs_filtered, verif_by_id, by_pair, filtered_i
     has_verif = bool(verif_by_id)
     has_all_view = mode == "b"
 
-    st.sidebar.header("Dataset")
+    st.sidebar.header("Pairs to browse")
     if has_all_view:
         pairs_final = [p for p in pairs_filtered if p["id"] in top_removed_ids]
         options = [f"all ({len(pairs)})",
-                   f"filtered ({len(pairs_filtered)})",
-                   f"final ({len(pairs_final)})"]
-        ds = st.sidebar.radio("Pairs to browse", options, index=1)
+                   f"filtered ({len(pairs_filtered)})"]
+        if top_removed_ids:
+            options.append(f"final ({len(pairs_final)})")
+        ds = st.sidebar.radio("Pairs to browse", options, index=1 if has_verif else 0,
+                              label_visibility="collapsed")
         if ds.startswith("all"):
             pair_list, viewing_all = pairs, True
         elif ds.startswith("filtered"):
@@ -399,12 +422,41 @@ def render_judges(pair, matches_for_pair):
                 st.code(j.get("raw") or "", language="json")
 
 
+def choose_source(args):
+    """Sidebar: pick RankJudge (HF) or one of our runs. Returns (mode, data_dir, matches_file)."""
+    runs = run_dirs()
+    labels = [os.path.relpath(d, ROOT) for d in runs] + [HF_SOURCE]
+    if args.mode == "a" or not runs:
+        default = HF_SOURCE
+    elif args.dir:
+        want = os.path.relpath(os.path.abspath(os.path.join(ROOT, args.dir)
+                                               if not os.path.isabs(args.dir) else args.dir), ROOT)
+        default = want if want in labels else labels[0]
+    else:
+        default = labels[0]
+    st.sidebar.header("Data source")
+    src = st.sidebar.selectbox("Data source", labels, index=labels.index(default),
+                               label_visibility="collapsed")
+    if src == HF_SOURCE:
+        return "a", None, None
+    data_dir = os.path.join(ROOT, src)
+    present = {k: v for k, v in MATCHES_FILES.items() if os.path.exists(os.path.join(data_dir, v))}
+    if not present:
+        st.sidebar.caption("No judge results in this folder yet.")
+        return "b", data_dir, args.matches_file
+    keys = list(present)
+    pre = next((k for k, v in present.items() if v == args.matches_file), keys[0])
+    cond = st.sidebar.radio("Judge condition", keys, index=keys.index(pre), horizontal=True)
+    return "b", data_dir, present[cond]
+
+
 def main():
     args = parse_args()
 
-    st.set_page_config(page_title="RankJudge data explorer", layout="wide")
-    st.title("RankJudge data explorer")
+    st.set_page_config(page_title="RepairJudge data explorer", layout="wide")
+    st.title("RepairJudge data explorer")
 
+    args.mode, data_dir, matches_file = choose_source(args)
     if args.mode == "a":
         st.caption(f"Mode A -- released dataset `{args.repo}` (split: {args.split})")
         try:
@@ -414,13 +466,12 @@ def main():
             st.error(f"Failed to load `{args.repo}` from Hugging Face: {e}")
             return
     else:
-        global MATCHES_FILE
-        MATCHES_FILE = args.matches_file
-        data_dir = os.path.abspath(args.dir)
-        st.caption(f"Mode B -- local data dir: `{data_dir}`, matches: `{args.matches_file}`")
+        has_matches = os.path.exists(os.path.join(data_dir, matches_file))
+        st.caption(f"Our run: `{os.path.relpath(data_dir, ROOT)}`"
+                   + (f", judges: `{matches_file}`" if has_matches else ", no judge results yet"))
         try:
             pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids = load_local(
-                data_dir, args.init_elo, args.top_pct)
+                data_dir, matches_file, args.init_elo, args.top_pct, files_signature(data_dir))
         except FileNotFoundError as e:
             st.error(f"Missing file in {data_dir}: {e}")
             return

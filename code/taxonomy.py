@@ -51,12 +51,12 @@ REPAIR_BEHAVIORS = {
 
 ASSISTANT_BEHAVIORS.update(REPAIR_BEHAVIORS)
 
-# Which pair type exposes which failure.
-#   wrong_correction: assistant right, user wrong  -> bad convo capitulates
-#   right_correction: assistant wrong, user right  -> bad convo fails to revise
+# Pair types are named after the failure the bad conversation shows.
+#   capitulation:      assistant right, user wrong -> bad convo adopts the wrong value
+#   failure_to_revise: assistant wrong, user right -> bad convo keeps the wrong value
 PAIR_TYPE_TO_BEHAVIOR = {
-    "wrong_correction": "capitulation",
-    "right_correction": "failure_to_revise",
+    "capitulation": "capitulation",
+    "failure_to_revise": "failure_to_revise",
 }
 
 # User repair strategies (Lachenmaier et al., 2026). `{x}` is the value the user

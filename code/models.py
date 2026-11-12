@@ -182,7 +182,7 @@ for _m in MODELS:
 ALL_MODELS = LOCAL_MODELS + MODELS
 
 # The five judges per backend. The generator is never a judge (self-preference bias):
-# local generator = gemma3:12b, API generator = openai/gpt-5.5. matches.py --exclude-model
+# local generator = gpt-oss:120b (on PACE), API generator = google/gemma-4-31b-it. matches.py --exclude-model
 # enforces this, so keep the generator out of these lists too.
 JUDGE_SETS = {
     "local": ["llama3.1-8b", "llama3.2-3b", "gemma3-4b", "mistral-7b", "qwen2.5-7b"],

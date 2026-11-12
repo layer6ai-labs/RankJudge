@@ -285,7 +285,7 @@ def parse_args():
     p.add_argument("--judges", nargs="*", default=None,
                    help="judge_name values from models.py (default: the five in JUDGE_SETS[--backend])")
     p.add_argument("--exclude-model", nargs="*", default=[],
-                   help="Model(s) to drop from the judge pool, e.g. the generator: gemma3:12b")
+                   help="Model(s) to drop from the judge pool, e.g. the generator: gpt-oss:120b")
     p.add_argument("--limit", type=int, default=None, help="Judge only the first N pairs")
     return p.parse_args()
 

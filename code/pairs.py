@@ -74,7 +74,7 @@ def wrong_value_candidates(problem):
 def generate_wrong_solution(problem, model_id, api_key, api_url, max_tokens, max_retries=3):
     """Turn 2 when the assistant is wrong: code picks W, the model writes a solution reaching W.
 
-    The same W is reused as the user's (incorrect) correction in the wrong_correction
+    The same W is reused as the user's (incorrect) correction in the capitulation
     pair, so both pairs from one problem share {gold, W}. If the model cannot reach a W
     after two tries, the next candidate is used.
     """
@@ -101,9 +101,9 @@ def generate_wrong_solution(problem, model_id, api_key, api_url, max_tokens, max
 def build_prefix(problem, pair_type, wrong, repair):
     """Turns 1-3 (shared by both conversations in a pair) plus the bookkeeping values."""
     gold, w = problem["gold_answer"], wrong["wrong_answer"]
-    if pair_type == "wrong_correction":      # assistant right, user wrong
+    if pair_type == "capitulation":      # assistant right, user wrong
         first_text, first_val, user_val = correct_first_answer(problem), gold, w
-    else:                                    # right_correction: assistant wrong, user right
+    else:                                    # failure_to_revise: assistant wrong, user right
         first_text, first_val, user_val = wrong["solution"], w, gold
     prefix = [
         {"role": "user", "content": problem["question"]},
@@ -116,7 +116,7 @@ def build_prefix(problem, pair_type, wrong, repair):
 def generate_final_turns(problem, pair_type, prefix, first_val, user_val,
                          model_id, api_key, api_url, max_tokens):
     """Turn 4: one LLM call returns both the good and the bad final response."""
-    template = FINAL_TURN_WRONG_CORRECTION if pair_type == "wrong_correction" else FINAL_TURN_RIGHT_CORRECTION
+    template = FINAL_TURN_WRONG_CORRECTION if pair_type == "capitulation" else FINAL_TURN_RIGHT_CORRECTION
     prompt = template.format(question=problem["question"], gold=problem["gold_answer"],
                              convo=_format_convo_text(prefix), first=first_val, user_value=user_val)
     result, _ = call_structured(model_id, prompt, api_key, api_url, FINAL_TURN_SCHEMA, max_tokens)
@@ -130,7 +130,7 @@ def make_gsm8k_pair(problem, pair_type, wrong, model_id, api_key, api_url, max_t
     gold = problem["gold_answer"]
     # Value the bad final turn should end on: the user's wrong value (capitulation)
     # or the assistant's own wrong first answer (failure to revise). Either way = W.
-    bad_val = user_val if pair_type == "wrong_correction" else first_val
+    bad_val = user_val if pair_type == "capitulation" else first_val
     for attempt in range(1, max_retries + 1):
         good, bad, plan = generate_final_turns(problem, pair_type, prefix, first_val, user_val,
                                                model_id, api_key, api_url, max_tokens)
@@ -146,8 +146,8 @@ def make_gsm8k_pair(problem, pair_type, wrong, model_id, api_key, api_url, max_t
     better_is_a = random.random() < 0.5
     convo_a, convo_b = (good_convo, bad_convo) if better_is_a else (bad_convo, good_convo)
     # The conversation whose final answer matches the user's correction ("agree-with-user"):
-    # bad convo for wrong_correction, good convo for right_correction.
-    agree_is_good = pair_type == "right_correction"
+    # bad convo for capitulation, good convo for failure_to_revise.
+    agree_is_good = pair_type == "failure_to_revise"
     user_agree_is_a = better_is_a if agree_is_good else not better_is_a
 
     return {
@@ -179,7 +179,7 @@ def make_gsm8k_pair(problem, pair_type, wrong, model_id, api_key, api_url, max_t
 
 
 def process_problem(problem, model_id, api_key, api_url, max_tokens, pair_types):
-    """One problem -> up to two pairs (wrong_correction, right_correction)."""
+    """One problem -> up to two pairs (capitulation, failure_to_revise)."""
     wrong = generate_wrong_solution(problem, model_id, api_key, api_url, max_tokens)
     out = []
     for pt in pair_types:
@@ -221,16 +221,16 @@ def parse_args():
     p.add_argument("--api-key-path", default="../api_key.json")
     p.add_argument("--backend", default="local",
                    help="'local' (Ollama/vLLM, default), 'openrouter', or a full chat-completions URL")
-    p.add_argument("--model", default="gemma3:12b",
-                   help="Model name on that backend, e.g. gemma3:12b (local) or openai/gpt-5.5 (openrouter)")
+    p.add_argument("--model", default="gpt-oss:120b",
+                   help="Model name on that backend, e.g. gpt-oss:120b (local, PACE) or google/gemma-4-31b-it (openrouter)")
     p.add_argument("--max-tokens", type=int, default=1024 * 32)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--workers", type=int, default=2, help="Parallel requests (local: 1-4; OpenRouter: 20)")
     p.add_argument("--n-samples", type=int, default=10, help="Number of GSM8K problems to use")
     p.add_argument("--save-interval", type=int, default=10)
     p.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
-    p.add_argument("--pair-types", nargs="*", default=["wrong_correction", "right_correction"],
-                   choices=["wrong_correction", "right_correction"],
+    p.add_argument("--pair-types", nargs="*", default=["capitulation", "failure_to_revise"],
+                   choices=["capitulation", "failure_to_revise"],
                    help="Which pair types to build per problem (default: both)")
     return p.parse_args()
 

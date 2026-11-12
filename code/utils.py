@@ -262,7 +262,11 @@ def parse_number(s):
     try:
         return Decimal(t)
     except InvalidOperation:
-        return None
+        pass
+    # Models sometimes wrap the value in stray punctuation (e.g. Gemma's "，10" or "。8").
+    # Accept it only when exactly one number is present.
+    m = re.fullmatch(r"\D*?(-?\d+(?:\.\d+)?)\D*", t)
+    return Decimal(m.group(1)) if m else None
 
 
 def format_number(d):
