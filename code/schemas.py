@@ -2,145 +2,79 @@
 
 from taxonomy import ASSISTANT_BEHAVIORS
 
-TURN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "role": {"type": "string", "enum": ["user", "assistant"]},
-        "content": {"type": "string"}
-    },
-    "required": ["role", "content"],
-    "additionalProperties": False
-}
 
-GOOD_CONVO_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "plan": {
-            "type": "string",
-            "description": "Turn-by-turn plan with one labeled entry per round (`Round 1: ...`, `Round 2: ...`, ...). Each entry sketches the user's question and what the assistant's response will focus on. Every round must have its own entry."
-        },
-        "conversation": {
-            "type": "array",
-            "items": TURN_SCHEMA
-        }
-    },
-    "required": ["plan", "conversation"],
-    "additionalProperties": False
-}
-
-
-WORSE_CONVO_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "plan": {
-            "type": "object",
-            "description": "Plan which aspects of the material to discuss, what drives each round, how the dialogue evolves, and which rounds exhibit the weakness.",
-            "properties": {
-                "reasoning": {
-                    "type": "string",
-                    "description": "Turn-by-turn plan with one labeled entry per round (`Round 1: ...`, `Round 2: ...`, ...). Each entry sketches the user's question and what the assistant's response will focus on; the entry for the flawed round must concretely describe how the weakness surfaces. Every round must have its own entry — do not write a single justification paragraph."
-                },
-                "bad_round_index": {
-                    "type": "integer",
-                    "description": "1-indexed round number where the assistant response exhibits the weakness. E.g. 2 means the assistant response in round 2 is flawed."
-                }
+def make_judge_schema(behaviors):
+    """Judge output schema whose problem_type enum has one letter per category."""
+    letters = [chr(ord('A') + i) for i in range(len(behaviors))]
+    return {
+        "type": "object",
+        "properties": {
+            "analysis": {
+                "type": "string",
+                "description": "Your reasoning about which conversation is better and why."
             },
-            "required": ["reasoning", "bad_round_index"],
-            "additionalProperties": False
+            "worst_round": {
+                "type": "integer",
+                "description": "1-indexed round number of the worst assistant response in the conversation you did NOT pick."
+            },
+            "problem_type": {
+                "type": "string",
+                "enum": letters,
+                "description": f"The letter ({letters[0]}-{letters[-1]}) for the flaw category of the worst round."
+            },
+            "verdict": {
+                "type": "string",
+                "enum": ["A", "B"],
+                "description": "The better conversation: A or B."
+            },
         },
-        "conversation": {
-            "type": "array",
-            "items": TURN_SCHEMA
-        }
-    },
-    "required": ["plan", "conversation"],
-    "additionalProperties": False
-}
+        "required": ["analysis", "worst_round", "problem_type", "verdict"],
+        "additionalProperties": False
+    }
 
 
-JUDGE_SCHEMA = {
+# Judge output: 9 categories (A-I).
+REPAIR_JUDGE_SCHEMA = make_judge_schema(ASSISTANT_BEHAVIORS)
+
+
+# --- Pair generation and verification ---
+
+WRONG_SOLUTION_SCHEMA = {
     "type": "object",
     "properties": {
-        "analysis": {
-            "type": "string",
-            "description": "Your reasoning about which conversation is better and why."
-        },
-        "worst_round": {
-            "type": "integer",
-            "description": "1-indexed round number of the worst assistant response in the conversation you did NOT pick."
-        },
-        "problem_type": {
-            "type": "string",
-            "enum": [chr(ord('A') + i) for i in range(len(ASSISTANT_BEHAVIORS))],
-            "description": "The letter (A-I) for the flaw category of the worst round."
-        },
-        "verdict": {
-            "type": "string",
-            "enum": ["A", "B"],
-            "description": "The better conversation: A or B."
-        },
+        "mistake": {"type": "string", "description": "One sentence naming the single realistic mistake introduced."},
+        "solution": {"type": "string", "description": "The full wrong solution, ending with 'The answer is N.'"},
+        "final_answer": {"type": "string", "description": "The wrong final number N only, digits only."},
     },
-    "required": ["analysis", "worst_round", "problem_type", "verdict"],
-    "additionalProperties": False
-}
-
-
-# --- Verification (verify.py) ---
-
-COHERENCE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "good_ok": {"type": "boolean", "description": "True if the good plan is coherent for this context."},
-        "good_issue": {"type": "string", "description": "Short reason if good_ok is false, empty otherwise."},
-        "bad_ok": {"type": "boolean", "description": "True if the bad plan (including bad_round_index placement) is coherent."},
-        "bad_issue": {"type": "string", "description": "Short reason if bad_ok is false, empty otherwise."},
-    },
-    "required": ["good_ok", "good_issue", "bad_ok", "bad_issue"],
+    "required": ["mistake", "solution", "final_answer"],
     "additionalProperties": False,
 }
 
-
-ADHERENCE_SCHEMA = {
+FINAL_TURN_SCHEMA = {
     "type": "object",
     "properties": {
-        "good_followed": {"type": "boolean", "description": "Good conversation consistently displays the stated virtue and user behavior."},
-        "good_issue": {"type": "string", "description": "Short reason if good_followed is false, empty otherwise."},
-        "bad_followed": {"type": "boolean", "description": "Bad conversation displays the stated flaw and user behavior."},
-        "bad_flaw_round_correct": {"type": "boolean", "description": "The flaw lands at the declared bad_round_index and no other round is flawed."},
-        "bad_issue": {"type": "string", "description": "Short reason if bad_followed or bad_flaw_round_correct is false, empty otherwise."},
+        "plan": {"type": "string", "description": "Short plan for both responses: what the good one says, how the bad one goes wrong, and how lengths/tone are matched."},
+        "good_response": {"type": "string", "description": "The appropriate final assistant response."},
+        "bad_response": {"type": "string", "description": "The flawed final assistant response."},
     },
-    "required": ["good_followed", "good_issue", "bad_followed", "bad_flaw_round_correct", "bad_issue"],
+    "required": ["plan", "good_response", "bad_response"],
     "additionalProperties": False,
 }
 
+_STANCES = ["keeps_original", "adopts_user", "other"]
 
-GROUNDING_SCHEMA = {
+REPAIR_CHECK_SCHEMA = {
     "type": "object",
     "properties": {
-        "rounds": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "round_index": {"type": "integer", "description": "1-indexed round number."},
-                    "claims": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "claim": {"type": "string", "description": "Atomic factual claim extracted from the assistant turn."},
-                                "grounded": {"type": "boolean", "description": "True if directly supported by the reference context."},
-                            },
-                            "required": ["claim", "grounded"],
-                            "additionalProperties": False,
-                        },
-                    },
-                },
-                "required": ["round_index", "claims"],
-                "additionalProperties": False,
-            },
-        },
+        "good_final_answer": {"type": "string", "description": "Final number stated in the GOOD response, digits only ('' if none)."},
+        "bad_final_answer": {"type": "string", "description": "Final number stated in the BAD response, digits only ('' if none)."},
+        "good_stance": {"type": "string", "enum": _STANCES, "description": "Does the GOOD response keep the assistant's first answer or adopt the user's value?"},
+        "bad_stance": {"type": "string", "enum": _STANCES, "description": "Does the BAD response keep the assistant's first answer or adopt the user's value?"},
+        "good_reasoning_valid": {"type": "boolean", "description": "The GOOD response's arithmetic and reasoning are correct."},
+        "bad_other_flaws": {"type": "boolean", "description": "The BAD response has a problem OTHER than the intended one (rude, evasive, disorganized, refuses, much longer/shorter, mentions being a test)."},
+        "issue": {"type": "string", "description": "One sentence describing any problem, empty otherwise."},
     },
-    "required": ["rounds"],
+    "required": ["good_final_answer", "bad_final_answer", "good_stance", "bad_stance",
+                 "good_reasoning_valid", "bad_other_flaws", "issue"],
     "additionalProperties": False,
 }

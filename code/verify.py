@@ -1,105 +1,99 @@
-"""Three-layer verification for synthetic conversation pairs: coherence, adherence, grounding."""
+"""Verify GSM8K user-correction pairs.
+
+Per pair: free numeric + structural checks against the GSM8K gold answer
+(repair_rule_checks), then one LLM audit call (repair_llm_check) if those pass.
+Only pairs that pass every check go to pairs_filtered.json.
+"""
 
 import argparse, json, os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils import call_structured, load_api_key
-from prompts import COHERENCE, ADHERENCE, GROUNDING
-from schemas import COHERENCE_SCHEMA, ADHERENCE_SCHEMA, GROUNDING_SCHEMA
-from taxonomy import ASSISTANT_BEHAVIORS, USER_BEHAVIORS
+from utils import call_structured, get_api_key, resolve_api_url, extract_final_number, numbers_equal
+from prompts import REPAIR_CHECK
+from schemas import REPAIR_CHECK_SCHEMA
 
 
-def format_convo(convo):
-    """Render a conversation as numbered rounds for prompts."""
-    lines = []
-    for i in range(0, len(convo), 2):
-        r = i // 2 + 1
-        lines.append(f"[Round {r}] USER: {convo[i]['content']}")
-        lines.append(f"[Round {r}] ASSISTANT: {convo[i+1]['content']}")
-    return "\n".join(lines)
+_GOALS = {
+    "wrong_correction": ("keep the correct first answer and explain why the user's value is wrong",
+                         "capitulate: abandon the correct answer and adopt the user's wrong value"),
+    "right_correction": ("acknowledge the error and revise to the user's (correct) value",
+                         "fail to revise: defend the original wrong answer"),
+}
 
 
-def format_assistant_turns(convo):
-    """Render only assistant turns with 1-indexed round numbers."""
-    lines = []
-    for i in range(1, len(convo), 2):
-        r = i // 2 + 1
-        lines.append(f"[Round {r}] ASSISTANT: {convo[i]['content']}")
-    return "\n".join(lines)
+def _good_bad(pair):
+    return ((pair["convo_a"], pair["convo_b"]) if pair["better_is_a"]
+            else (pair["convo_b"], pair["convo_a"]))
 
 
-def verify_coherence(pair, model_id, api_key, api_url, max_tokens):
+def _words(text):
+    return len(text.split())
+
+
+def repair_rule_checks(pair, min_length_ratio):
+    """Deterministic checks that need no API call. Returns {check_name: bool}."""
     m = pair["metadata"]
-    beh = m["assistant_behavior_type"]
-    prompt = COHERENCE.format(
-        context=m["context"],
-        user_behavior_name=m["user_behavior_type"],
-        user_behavior_desc=USER_BEHAVIORS[m["user_behavior_type"]],
-        assistant_behavior_name=beh,
-        virtue=ASSISTANT_BEHAVIORS[beh]["virtue"],
-        flaw=ASSISTANT_BEHAVIORS[beh]["flaw"],
-        n_rounds=m["n_rounds"],
-        bad_round_index=m["bad_round_index"],
-        good_plan=pair["plan"]["good"],
-        bad_plan=pair["plan"]["bad"])
-    result, _ = call_structured(model_id, prompt, api_key, api_url, COHERENCE_SCHEMA, max_tokens)
-    return result
+    good, bad = _good_bad(pair)
+    gold, w = m["gold_answer"], m["wrong_answer"]
+    exp_first = gold if m["pair_type"] == "wrong_correction" else w
+    exp_user = w if m["pair_type"] == "wrong_correction" else gold
+    g_len, b_len = _words(good[-1]["content"]), _words(bad[-1]["content"])
+    return {
+        "four_turns": len(good) == 4 and len(bad) == 4,
+        "shared_prefix": good[:3] == bad[:3],
+        "gold_ne_wrong": not numbers_equal(gold, w),
+        "first_answer_value": numbers_equal(extract_final_number(good[1]["content"]), exp_first),
+        "user_correction_value": numbers_equal(extract_final_number(good[2]["content"]), exp_user),
+        "good_final_is_gold": numbers_equal(extract_final_number(good[3]["content"]), m["good_final_value"]),
+        "bad_final_is_flawed_value": numbers_equal(extract_final_number(bad[3]["content"]), m["bad_final_value"]),
+        "length_matched": min(g_len, b_len) / max(g_len, b_len, 1) >= min_length_ratio,
+    }
 
 
-def verify_adherence(pair, model_id, api_key, api_url, max_tokens):
+def repair_llm_check(pair, model_id, api_key, api_url, max_tokens):
+    """One LLM audit call: final answers, stance, reasoning validity, extra flaws."""
     m = pair["metadata"]
-    beh = m["assistant_behavior_type"]
-    good_convo, bad_convo = ((pair["convo_a"], pair["convo_b"]) if pair["better_is_a"]
-                             else (pair["convo_b"], pair["convo_a"]))
-    prompt = ADHERENCE.format(
-        user_behavior_name=m["user_behavior_type"],
-        user_behavior_desc=USER_BEHAVIORS[m["user_behavior_type"]],
-        assistant_behavior_name=beh,
-        virtue=ASSISTANT_BEHAVIORS[beh]["virtue"],
-        flaw=ASSISTANT_BEHAVIORS[beh]["flaw"],
-        n_rounds=m["n_rounds"],
-        bad_round_index=m["bad_round_index"],
-        good_plan=pair["plan"]["good"],
-        bad_plan=pair["plan"]["bad"],
-        good_convo=format_convo(good_convo),
-        bad_convo=format_convo(bad_convo))
-    result, _ = call_structured(model_id, prompt, api_key, api_url, ADHERENCE_SCHEMA, max_tokens)
-    return result
+    good, bad = _good_bad(pair)
+    good_goal, bad_goal = _GOALS[m["pair_type"]]
+    prompt = REPAIR_CHECK.format(
+        good_goal=good_goal, bad_goal=bad_goal, question=m["context"], gold=m["gold_answer"],
+        convo=format_convo_flat(good[:3]), good=good[3]["content"], bad=bad[3]["content"],
+        first=m["first_answer_value"], user_value=m["user_correction_value"])
+    result, _ = call_structured(model_id, prompt, api_key, api_url, REPAIR_CHECK_SCHEMA, max_tokens)
+    keeps_good = "keeps_original" if m["pair_type"] == "wrong_correction" else "adopts_user"
+    keeps_bad = "adopts_user" if m["pair_type"] == "wrong_correction" else "keeps_original"
+    checks = {
+        "llm_good_answer": numbers_equal(result["good_final_answer"], m["good_final_value"]),
+        "llm_bad_answer": numbers_equal(result["bad_final_answer"], m["bad_final_value"]),
+        "llm_good_stance": result["good_stance"] == keeps_good,
+        "llm_bad_stance": result["bad_stance"] == keeps_bad,
+        "llm_good_reasoning_valid": bool(result["good_reasoning_valid"]),
+        "llm_bad_single_flaw": not result["bad_other_flaws"],
+    }
+    return checks, result
 
 
-def _ground_one(convo, label, skip_rounds, context, model_id, api_key, api_url, max_tokens):
-    prompt = GROUNDING.format(
-        label=label,
-        context=context,
-        skip_rounds=skip_rounds,
-        turns=format_assistant_turns(convo))
-    result, _ = call_structured(model_id, prompt, api_key, api_url, GROUNDING_SCHEMA, max_tokens)
-    rounds = [r for r in result.get("rounds", []) if r["round_index"] not in skip_rounds]
-    total = sum(len(r["claims"]) for r in rounds)
-    grounded = sum(c["grounded"] for r in rounds for c in r["claims"])
-    rate = grounded / total if total else None
-    return {"rounds": rounds, "grounded_rate": rate}
+def format_convo_flat(convo):
+    return "\n\n".join(f"{'USER' if t['role'] == 'user' else 'ASSISTANT'}: {t['content']}" for t in convo)
 
 
-def verify_grounding(pair, model_id, api_key, api_url, max_tokens):
-    m = pair["metadata"]
-    good_convo, bad_convo = ((pair["convo_a"], pair["convo_b"]) if pair["better_is_a"]
-                             else (pair["convo_b"], pair["convo_a"]))
-    good = _ground_one(good_convo, "good", [], m["context"], model_id, api_key, api_url, max_tokens)
-    bad = _ground_one(bad_convo, "bad", [m["bad_round_index"]], m["context"], model_id, api_key, api_url, max_tokens)
-    return {"good": good, "bad": bad}
+def verify_repair(pair, model_id, api_key, api_url, max_tokens, use_llm=True, min_length_ratio=0.6):
+    checks = repair_rule_checks(pair, min_length_ratio)
+    llm = None
+    # Skip the paid call if the free checks already fail.
+    if use_llm and all(checks.values()):
+        llm_checks, llm = repair_llm_check(pair, model_id, api_key, api_url, max_tokens)
+        checks.update(llm_checks)
+    failed = [k for k, v in checks.items() if not v]
+    return {"id": pair["id"], "domain": "gsm8k", "kind": "repair",
+            "pair_type": pair["metadata"]["pair_type"],
+            "checks": checks, "llm": llm, "failed": failed,
+            "passed": not failed and (llm is not None or not use_llm)}
 
 
-def verify_pair(pair, model_id, api_key, api_url, max_tokens):
-    pid = pair["id"]
-    try:
-        coherence = verify_coherence(pair, model_id, api_key, api_url, max_tokens)
-        adherence = verify_adherence(pair, model_id, api_key, api_url, max_tokens)
-        grounding = verify_grounding(pair, model_id, api_key, api_url, max_tokens)
-    except Exception as e:
-        print(f"  [{pid}] ERROR: {e}", flush=True)
-        raise
-    return {"id": pid, "coherence": coherence, "adherence": adherence, "grounding": grounding}
+def verify_pair(pair, model_id, api_key, api_url, max_tokens, args):
+    return verify_repair(pair, model_id, api_key, api_url, max_tokens,
+                         args.repair_llm_check, args.min_length_ratio)
 
 
 def load_state(args):
@@ -118,10 +112,7 @@ def save_results(path, results):
 
 
 def pair_passes(v):
-    c, a, g = v["coherence"], v["adherence"], v["grounding"]
-    return (c["good_ok"] and c["bad_ok"]
-            and a["good_followed"] and a["bad_followed"] and a["bad_flaw_round_correct"]
-            and g["good"]["grounded_rate"] == 1.0 and g["bad"]["grounded_rate"] == 1.0)
+    return v["passed"]
 
 
 def filter_pairs(pairs, results):
@@ -134,6 +125,17 @@ def save_filtered(pairs, results, args):
     with open(args.filtered_out, "w") as f:
         json.dump(kept, f, indent=2)
     print(f"Filtered: {len(kept)}/{len(pairs)} pairs passed -> {args.filtered_out}")
+    by_type = {}
+    for p in pairs:
+        t = p.get("metadata", {}).get("pair_type")
+        if t:
+            by_type.setdefault(t, [0, 0])[1] += 1
+    for p in kept:
+        t = p.get("metadata", {}).get("pair_type")
+        if t:
+            by_type[t][0] += 1
+    for t, (k, n) in sorted(by_type.items()):
+        print(f"  {t}: {k}/{n} passed")
 
 
 def run_verification(pairs, results, done_ids, args):
@@ -141,17 +143,14 @@ def run_verification(pairs, results, done_ids, args):
     print(f"Verifying {len(pairs)} pairs with {args.model}...", flush=True)
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(verify_pair, p, args.model, args.api_key,
-                          args.api_url, args.max_tokens): p for p in pairs}
+                          args.api_url, args.max_tokens, args): p for p in pairs}
         for i, fut in enumerate(as_completed(futs), 1):
             pair = futs[fut]
             try:
                 r = fut.result()
                 results.append(r)
-                g = r["grounding"]["good"]["grounded_rate"]
-                b = r["grounding"]["bad"]["grounded_rate"]
-                print(f"[{i}/{len(pairs)}] {pair['id']} - coh(g={r['coherence']['good_ok']},b={r['coherence']['bad_ok']}) "
-                      f"adh(g={r['adherence']['good_followed']},b={r['adherence']['bad_flaw_round_correct']}) "
-                      f"ground(g={g},b={b})", flush=True)
+                print(f"[{i}/{len(pairs)}] {pair['id']} ({r['pair_type']}) - "
+                      f"{'PASS' if r['passed'] else 'FAIL ' + ','.join(r['failed'])}", flush=True)
             except Exception as e:
                 print(f"[{i}/{len(pairs)}] {pair['id']} - FAILED: {e}", flush=True)
             if i % args.save_interval == 0:
@@ -162,26 +161,33 @@ def run_verification(pairs, results, done_ids, args):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Three-layer verification for synthetic pairs")
-    p.add_argument("--pairs", default="../outputs/mode_b/pairs.json")
-    p.add_argument("--out", default="../outputs/mode_b/verification.json")
-    p.add_argument("--filtered-out", default="../outputs/mode_b/pairs_filtered.json")
+    p = argparse.ArgumentParser(description="Verify GSM8K user-correction pairs")
+    p.add_argument("--pairs", default="../outputs/repair/pairs.json")
+    p.add_argument("--out", default="../outputs/repair/verification.json")
+    p.add_argument("--filtered-out", default="../outputs/repair/pairs_filtered.json")
     p.add_argument("--api-key-path", default="../api_key.json")
-    p.add_argument("--api-url", default="https://openrouter.ai/api/v1/chat/completions")
-    p.add_argument("--model", default="openai/gpt-5.5")
+    p.add_argument("--backend", default="local",
+                   help="'local' (Ollama/vLLM, default), 'openrouter', or a full chat-completions URL")
+    p.add_argument("--model", default="gemma3:12b",
+                   help="Model name on that backend, e.g. gemma3:12b (local) or openai/gpt-5.5 (openrouter)")
     p.add_argument("--max-tokens", type=int, default=1024 * 32)
-    p.add_argument("--workers", type=int, default=20)
+    p.add_argument("--workers", type=int, default=2, help="Parallel requests (local: 1-4; OpenRouter: 20)")
     p.add_argument("--save-interval", type=int, default=10)
     p.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--repair-llm-check", action=argparse.BooleanOptionalAction, default=True,
+                   help="Also run the LLM audit (default). --no-repair-llm-check = free rule checks only.")
+    p.add_argument("--min-length-ratio", type=float, default=0.6,
+                   help="Min word-count ratio between good and bad final turns")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    args.api_key = load_api_key(args.api_key_path)
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.pairs) as f:
         pairs = json.load(f)
+    args.api_url = resolve_api_url(args.backend)
+    args.api_key = get_api_key(args.api_key_path, [args.api_url]) if args.repair_llm_check else None
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     results, done_ids = load_state(args)
     run_verification(pairs, results, done_ids, args)
     save_filtered(pairs, results, args)

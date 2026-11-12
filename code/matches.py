@@ -1,19 +1,20 @@
-"""
-RankJudge match runner (multi-turn).
+"""Judge runner for GSM8K user-correction pairs.
 
-Judge LLMs evaluate pairs of multi-turn conversations.
-Both judges and pairs get Elo ratings.
-A judge "wins" if it correctly identifies the better conversation.
+Each judge sees two conversations (A, B) and returns: the better one, the round of
+the problematic response, and its error type (A-I). Two conditions:
+  dialogue (default)  the judge sees only the conversations
+  gold (--gold)       the prompt also states the correct final answer   (RQ3)
+A judge is "correct" (joint accuracy) only if all three answers are right.
 """
 
 import argparse, json, os, re, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils import call_openrouter, load_api_key
-from metrics import compute_metrics
-from prompts import JUDGE, LETTER_TO_BEHAVIOR
-from models import MODELS
-from schemas import JUDGE_SCHEMA
+from utils import call_openrouter, get_api_key, resolve_api_url
+from metrics import compute_repair_metrics
+from prompts import JUDGE_REPAIR, GOLD_SECTION, LETTER_TO_BEHAVIOR
+from models import ALL_MODELS, JUDGE_SETS
+from schemas import REPAIR_JUDGE_SCHEMA
 
 
 def format_convo(convo):
@@ -24,20 +25,16 @@ def format_convo(convo):
     return "\n\n".join(lines)
 
 
-def build_judge_prompt(pair, with_context=False):
-    text_a = format_convo(pair["convo_a"])
-    text_b = format_convo(pair["convo_b"])
-    meta = pair.get("metadata", {})
-    context_section = ""
-    if with_context:
-        context = meta.get("context", "")
-        context_section = f"\n=== Reference Context ===\n{context}\n"
-    return JUDGE.format(context_section=context_section, text_a=text_a, text_b=text_b)
+def build_judge_prompt(pair, gold=False):
+    """The problem is turn 1 of each conversation; the gold answer is added only with --gold."""
+    gold_section = GOLD_SECTION.format(gold=pair["metadata"]["gold_answer"]) if gold else ""
+    return JUDGE_REPAIR.format(gold_section=gold_section,
+                               text_a=format_convo(pair["convo_a"]), text_b=format_convo(pair["convo_b"]))
 
 
 JUDGE_RESP_FORMAT = {
     "type": "json_schema",
-    "json_schema": {"name": "response", "strict": True, "schema": JUDGE_SCHEMA}
+    "json_schema": {"name": "response", "strict": True, "schema": REPAIR_JUDGE_SCHEMA}
 }
 
 
@@ -50,6 +47,11 @@ def load_state(args):
             results = json.load(f)
         done_keys = {(r["id"], r["model"]["name"]) for r in results if r.get("judge", {}).get("answer") is not None}
         results = [r for r in results if (r["id"], r["model"]["name"]) in done_keys]
+        conds = {r.get("condition") for r in results} - {None}
+        want = "gold" if args.gold else "dialogue"
+        if conds and conds != {want}:
+            raise SystemExit(f"{args.matches_out} holds condition(s) {sorted(conds)} but this run is '{want}'. "
+                             "Use a separate --matches-out per condition.")
         print(f"Resuming: {len(done_keys)} done, {len(results)} matches loaded.")
     return results, done_keys
 
@@ -61,32 +63,51 @@ def save_matches(path, results):
 
 # --- Job building and execution ---
 
+def select_models(models, judge_names=None, exclude_models=()):
+    """Filter the judge pool by name and drop any model that also generated the data."""
+    out = []
+    for m in models:
+        if judge_names and m["judge_name"] not in judge_names:
+            continue
+        if m["model_id"] in exclude_models or m["judge_name"] in exclude_models:
+            print(f"Excluding judge {m['judge_name']} (same model as generator)")
+            continue
+        out.append(m)
+    if judge_names:
+        missing = set(judge_names) - {m["judge_name"] for m in models}
+        if missing:
+            raise ValueError(f"Unknown judge names (see models.py): {sorted(missing)}")
+    return out
+
+
 def build_judge_configs(models):
     configs = []
     for m in models:
-        configs.append((m["judge_name"], m["openrouter_name"], m["add_context"], m["support_thinking"], m.get("use_thinking", m["support_thinking"])))
+        configs.append((m["judge_name"], m["model_id"], resolve_api_url(m["backend"]),
+                        m["support_thinking"], m.get("use_thinking", m["support_thinking"])))
     return configs
 
 
 def build_jobs(pairs, judge_configs, done_keys):
+    # Judge by judge (outer loop), so a local server loads each model once instead of swapping.
     jobs = []
-    for pair in pairs:
-        pid = pair["id"]
-        for name, model_id, with_context, support_thinking, use_thinking in judge_configs:
-            if (pid, name) not in done_keys:
-                jobs.append((pair, name, model_id, with_context, support_thinking, use_thinking))
+    for name, model_id, api_url, support_thinking, use_thinking in judge_configs:
+        for pair in pairs:
+            if (pair["id"], name) not in done_keys:
+                jobs.append((pair, name, model_id, api_url, support_thinking, use_thinking))
     return jobs
 
 
 _printed_judge_example = False
 
-def run_match(pair, model_name, model_id, with_context, support_thinking, use_thinking, api_key, api_url, max_tokens=8192, max_retries=3):
+def run_match(pair, model_name, model_id, api_url, support_thinking, use_thinking, api_key, max_tokens=8192, max_retries=3, gold=False):
     global _printed_judge_example
-    prompt = build_judge_prompt(pair, with_context=with_context)
+    condition = "gold" if gold else "dialogue"
+    prompt = build_judge_prompt(pair, gold=gold)
     if not _printed_judge_example:
         _printed_judge_example = True
         print("\n" + "="*80)
-        print(f"EXAMPLE JUDGE PROMPT (model={model_name}, context={with_context})")
+        print(f"EXAMPLE JUDGE PROMPT (model={model_name}, condition={condition})")
         print("="*80)
         print(prompt)
         print("="*80 + "\n")
@@ -109,7 +130,6 @@ def run_match(pair, model_name, model_id, with_context, support_thinking, use_th
             judge_answer = parsed["verdict"]
             worst_round = parsed["worst_round"]
             bad_round_pred = int(worst_round) if worst_round is not None else None
-            behavior_type_pred = LETTER_TO_BEHAVIOR.get(parsed["problem_type"], parsed["problem_type"])
             behavior_type_pred = LETTER_TO_BEHAVIOR.get(parsed["problem_type"], parsed["problem_type"])
             break
         except (json.JSONDecodeError, KeyError, TypeError) as e:
@@ -148,18 +168,26 @@ def run_match(pair, model_name, model_id, with_context, support_thinking, use_th
     else:
         correct = None
 
+    # Did the judge prefer the conversation that agrees with the user?
+    user_agree_is_a = meta.get("user_agree_is_a")
+    picked_agree = (judge_answer == ("A" if user_agree_is_a else "B")) if judge_answer and user_agree_is_a is not None else None
+
     return {
         "id": pair["id"],
         "domain": pair.get("domain", ""),
+        "condition": condition,
         "better_is_a": better_is_a,
         "pair": {
             "assistant_behavior_type": behavior_type_gt,
             "user_behavior_type": meta.get("user_behavior_type") or pair.get("user_behavior_type", ""),
+            "pair_type": meta.get("pair_type"),
+            "problem_id": meta.get("problem_id"),
+            "user_agree_is_a": user_agree_is_a,
         },
         "model": {
             "name": model_name,
-            "openrouter_name": model_id,
-            "add_context": with_context,
+            "model_id": model_id,
+            "api_url": api_url,
             "support_thinking": support_thinking,
             "use_thinking": use_thinking,
         },
@@ -174,6 +202,7 @@ def run_match(pair, model_name, model_id, with_context, support_thinking, use_th
             "correct_bad_round": correct_bad_round,
             "correct_behavior_type": correct_behavior_type,
             "correct": correct,
+            "picked_agree_with_user": picked_agree,
         },
         "usage": {
             "prompt_tokens": usage.get("prompt_tokens"),
@@ -184,10 +213,11 @@ def run_match(pair, model_name, model_id, with_context, support_thinking, use_th
     }
 
 
-def make_error_match(pid, name, pair, error):
+def make_error_match(pid, name, pair, error, condition):
     return {
         "id": pid,
         "domain": pair.get("domain", ""),
+        "condition": condition,
         "better_is_a": None,
         "pair": {
             "assistant_behavior_type": pair.get("metadata", {}).get("assistant_behavior_type") or pair.get("assistant_behavior_type", ""),
@@ -212,15 +242,16 @@ def run_jobs(jobs, results, args):
     print(f"{len(jobs)} jobs to run, {len(results)} already done.")
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(run_match, pair, name, mid, ctx, think, use_think, args.api_key, args.api_url, args.max_tokens): (pair["id"], name, pair)
-            for pair, name, mid, ctx, think, use_think in jobs
+            executor.submit(run_match, pair, name, mid, url, think, use_think, args.api_key,
+                            args.max_tokens, 3, args.gold): (pair["id"], name, pair)
+            for pair, name, mid, url, think, use_think in jobs
         }
         for i, future in enumerate(as_completed(futures), 1):
             pid, name, pair = futures[future]
             try:
                 match = future.result()
             except Exception as e:
-                match = make_error_match(pid, name, pair, e)
+                match = make_error_match(pid, name, pair, e, "gold" if args.gold else "dialogue")
 
             results.append(match)
             judge_correct = match["judge"]["correct"]
@@ -237,39 +268,46 @@ def run_jobs(jobs, results, args):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="RankJudge match runner")
+    p = argparse.ArgumentParser(description="Judge GSM8K user-correction pairs")
     p.add_argument("--api-key-path", default="../api_key.json")
-    p.add_argument("--api-url", default="https://openrouter.ai/api/v1/chat/completions")
-    p.add_argument("--pairs", default="../outputs/mode_b/pairs_filtered.json")
-    p.add_argument("--matches-out", default="../outputs/mode_b/matches.json")
-    p.add_argument("--metrics-out", default="../outputs/mode_b/metrics.json")
-    p.add_argument("--init-elo", type=int, default=1500)
-    p.add_argument("--top-pct", type=float, default=0.05,
-                   help="Fraction of top-Elo pairs to remove for the top_removed slice")
-    p.add_argument("--no-top-removed", action="store_true",
-                   help="Skip the top_removed slice")
+    p.add_argument("--backend", choices=["local", "openrouter"], default="local",
+                   help="Default judge set: JUDGE_SETS[backend] in models.py (default: local)")
+    p.add_argument("--pairs", default="../outputs/repair/pairs_filtered.json")
+    p.add_argument("--matches-out", default="../outputs/repair/matches_dialogue.json")
+    p.add_argument("--metrics-out", default="../outputs/repair/metrics_dialogue.json")
     p.add_argument("--max-tokens", type=int, default=1024*32)
-    p.add_argument("--workers", type=int, default=50)
+    p.add_argument("--workers", type=int, default=2,
+                   help="Parallel requests (local: 1-4; OpenRouter: 20-50)")
     p.add_argument("--save-interval", type=int, default=10)
     p.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
-    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--gold", action="store_true",
+                   help="Show the gold answer to the judge (condition 'gold'). Use a separate --matches-out.")
+    p.add_argument("--judges", nargs="*", default=None,
+                   help="judge_name values from models.py (default: the five in JUDGE_SETS[--backend])")
+    p.add_argument("--exclude-model", nargs="*", default=[],
+                   help="Model(s) to drop from the judge pool, e.g. the generator: gemma3:12b")
+    p.add_argument("--limit", type=int, default=None, help="Judge only the first N pairs")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    args.api_key = load_api_key(args.api_key_path)
     os.makedirs(os.path.dirname(os.path.abspath(args.matches_out)), exist_ok=True)
 
-    judge_configs = build_judge_configs(MODELS)
     with open(args.pairs) as f:
         pairs = json.load(f)
+    if args.limit:
+        pairs = pairs[:args.limit]
+    models = select_models(ALL_MODELS, args.judges or JUDGE_SETS[args.backend], args.exclude_model)
+    print(f"Judges ({len(models)}): {[m['judge_name'] + ' (' + m['backend'] + ')' for m in models]}")
+    judge_configs = build_judge_configs(models)
+    args.api_key = get_api_key(args.api_key_path, [c[2] for c in judge_configs])
     results, done_keys = load_state(args)
 
     jobs = build_jobs(pairs, judge_configs, done_keys)
     results = run_jobs(jobs, results, args)
     save_matches(args.matches_out, results)
-    compute_metrics(results, args)
+    compute_repair_metrics(results, args.metrics_out)
 
 
 if __name__ == "__main__":
