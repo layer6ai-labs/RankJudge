@@ -52,7 +52,7 @@ pip install -r requirements.txt
 ### 3. Download the data (free, no API key)
 
 ```bash
-cd code && python preprocessing/gsm8k.py --n 300 && cd ..
+cd code && python preprocessing/gsm8k.py --n 300
 ```
 
 This downloads GSM8K from Hugging Face, samples 300 problems (fixed seed, so everyone gets the
