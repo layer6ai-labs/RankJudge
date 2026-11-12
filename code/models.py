@@ -1,3 +1,28 @@
+"""Judge pool.
+
+Each entry: judge_name (our label), model_id (the name the server knows), backend
+("local" = Ollama/vLLM on this machine, "openrouter" = API), and thinking flags.
+
+LOCAL_MODELS are the default. MODELS (the RankJudge list) are OpenRouter models,
+used only with --backend openrouter. JUDGE_SETS picks the five judges per backend.
+"""
+
+LOCAL_MODELS = [
+    # model_id = Ollama tag. Download each once with:  ollama pull <model_id>
+    {"judge_name": "llama3.1-8b", "model_id": "llama3.1:8b", "backend": "local",
+     "add_context": False, "support_thinking": False, "use_thinking": False},
+    {"judge_name": "llama3.2-3b", "model_id": "llama3.2:3b", "backend": "local",
+     "add_context": False, "support_thinking": False, "use_thinking": False},
+    {"judge_name": "gemma3-4b", "model_id": "gemma3:4b", "backend": "local",
+     "add_context": False, "support_thinking": False, "use_thinking": False},
+    {"judge_name": "gemma3-12b", "model_id": "gemma3:12b", "backend": "local",
+     "add_context": False, "support_thinking": False, "use_thinking": False},
+    {"judge_name": "mistral-7b", "model_id": "mistral:7b", "backend": "local",
+     "add_context": False, "support_thinking": False, "use_thinking": False},
+    {"judge_name": "qwen2.5-7b", "model_id": "qwen2.5:7b", "backend": "local",
+     "add_context": False, "support_thinking": False, "use_thinking": False},
+]
+
 MODELS = [
     {
         "judge_name": "opus-4.7",
@@ -147,3 +172,19 @@ MODELS = [
         "use_thinking": True,
     }
 ]
+
+
+
+for _m in MODELS:
+    _m.setdefault("backend", "openrouter")
+    _m.setdefault("model_id", _m["openrouter_name"])
+
+ALL_MODELS = LOCAL_MODELS + MODELS
+
+# The five judges per backend. The generator is never a judge (self-preference bias):
+# local generator = gemma3:12b, API generator = openai/gpt-5.5. matches.py --exclude-model
+# enforces this, so keep the generator out of these lists too.
+JUDGE_SETS = {
+    "local": ["llama3.1-8b", "llama3.2-3b", "gemma3-4b", "mistral-7b", "qwen2.5-7b"],
+    "openrouter": ["sonnet-4.6", "gemini-3-flash", "gpt-5.4-mini", "qwen3.5-122b-a10b", "deepseek-v3.2"],
+}

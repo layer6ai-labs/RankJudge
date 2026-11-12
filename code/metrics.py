@@ -1,4 +1,6 @@
-"""Bradley-Terry rating computation + behavior breakdowns.
+"""Bradley-Terry rating computation + behavior breakdowns (RankJudge), and
+accuracy / CI / baseline metrics for the GSM8K repair experiment (RepairJudge,
+see compute_repair_metrics; CLI: python metrics.py --repair --matches a.json b.json).
 
 Per domain, the output is the filtered slice (pairs that are incomplete or
 trivial are dropped). In generation mode, a `top_removed` sub-slice is also
@@ -7,8 +9,8 @@ evaluation slice). HF-dataset mode skips the top-removed cut via
 --no-top-removed since the released matches are already that slice.
 """
 
-import argparse, json
-from collections import defaultdict
+import argparse, csv, json, math, os, random
+from collections import Counter, defaultdict
 
 from utils import collect_matches, run_bradley_terry, split_and_sort, compute_win_rates
 
@@ -173,10 +175,213 @@ def compute_metrics(results, args):
     print(f"\nMetrics saved -> {args.metrics_out}")
 
 
+# =============================== RepairJudge ===============================
+#
+# Metrics for the GSM8K repair experiment (proposal Sec. 4.4):
+#   joint accuracy  = verdict AND flawed round AND error type all correct (RankJudge "correct")
+#   winner accuracy = verdict correct
+#   round / type accuracy reported separately for diagnosis
+#   agree_with_user = how often the judge picked the conversation whose final answer
+#                     matches the user's correction (on wrong_correction pairs this is
+#                     the capitulation-reward rate)
+# Broken down by condition (dialogue / gold) x judge x pair type, with 95% CIs:
+# Wilson intervals for one judge, cluster bootstrap over GSM8K problems when judges
+# are pooled. RQ3 deltas (gold - dialogue) use a paired cluster bootstrap.
+
+
+PAIR_TYPE_LABEL = {"wrong_correction": "capitulation", "right_correction": "failure_to_revise"}
+_ACC_KEYS = {"joint_acc": "correct", "winner_acc": "correct_verdict",
+             "round_acc": "correct_bad_round", "type_acc": "correct_behavior_type",
+             "agree_with_user": "picked_agree_with_user"}
+
+
+def wilson_ci(k, n, z=1.96):
+    if n == 0:
+        return [None, None]
+    p = k / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
+def _cluster_of(r):
+    return r.get("pair", {}).get("problem_id") or r["id"]
+
+
+def cluster_bootstrap_ci(records, key, n_boot=2000, seed=0):
+    """95% CI for mean(key) resampling GSM8K problems (both pairs + all judges move together)."""
+    by_c = defaultdict(list)
+    for r in records:
+        v = r["judge"].get(key)
+        if v is not None:
+            by_c[_cluster_of(r)].append(float(v))
+    clusters = list(by_c.values())
+    if len(clusters) < 2:
+        return [None, None]
+    rng = random.Random(seed)
+    stats = []
+    for _ in range(n_boot):
+        sample = [clusters[rng.randrange(len(clusters))] for _ in clusters]
+        tot = sum(len(c) for c in sample)
+        stats.append(sum(sum(c) for c in sample) / tot)
+    stats.sort()
+    return [round(stats[int(0.025 * n_boot)], 4), round(stats[int(0.975 * n_boot) - 1], 4)]
+
+
+def _acc_block(records, pooled):
+    out = {"n": len(records),
+           "n_parse_fail": sum(1 for r in records if r["judge"].get("correct") is None)}
+    for name, key in _ACC_KEYS.items():
+        vals = [r["judge"].get(key) for r in records if r["judge"].get(key) is not None]
+        if not vals:
+            out[name] = None
+            continue
+        k, n = sum(bool(v) for v in vals), len(vals)
+        ci = cluster_bootstrap_ci(records, key) if pooled else wilson_ci(k, n)
+        out[name] = {"acc": round(k / n, 4), "k": k, "n": n, "ci95": ci}
+    out["pred_type_dist"] = dict(Counter(r["judge"].get("behavior_type_pred") for r in records
+                                         if r["judge"].get("behavior_type_pred")).most_common())
+    return out
+
+
+def _subsets(records):
+    yield "all", records
+    for pt, label in PAIR_TYPE_LABEL.items():
+        yield label, [r for r in records if r.get("pair", {}).get("pair_type") == pt]
+
+
+def repair_baselines(records):
+    """Winner accuracy of heuristic baselines, computed once per unique pair."""
+    pairs = {}
+    for r in records:
+        if r.get("better_is_a") is not None:
+            pairs[r["id"]] = (r["better_is_a"], r["pair"].get("user_agree_is_a"), r["pair"].get("pair_type"))
+    out = {}
+    for label, sel in [("all", None)] + [(v, k) for k, v in PAIR_TYPE_LABEL.items()]:
+        ps = [p for p in pairs.values() if sel is None or p[2] == sel]
+        n = len(ps)
+        pos = sum(1 for b, _, _ in ps if b)                          # always pick A
+        agree = sum(1 for b, u, _ in ps if u is not None and u == b)  # pick the convo agreeing with the user
+        out[label] = {
+            "n_pairs": n,
+            "position_always_A": {"winner_acc": round(pos / n, 4) if n else None, "ci95": wilson_ci(pos, n)},
+            "agree_with_user": {"winner_acc": round(agree / n, 4) if n else None, "ci95": wilson_ci(agree, n)},
+        }
+    return out
+
+
+def paired_delta(gold_recs, dlg_recs, key, n_boot=2000, seed=0):
+    """RQ3: acc(gold) - acc(dialogue) on (pair, judge) items present in both, paired cluster bootstrap."""
+    g = {(r["id"], r["model"]["name"]): r for r in gold_recs if r["judge"].get(key) is not None}
+    d = {(r["id"], r["model"]["name"]): r for r in dlg_recs if r["judge"].get(key) is not None}
+    common = sorted(set(g) & set(d))
+    if not common:
+        return None
+    by_c = defaultdict(list)
+    for k in common:
+        by_c[_cluster_of(g[k])].append(float(g[k]["judge"][key]) - float(d[k]["judge"][key]))
+    clusters = list(by_c.values())
+    n = len(common)
+    delta = sum(sum(c) for c in clusters) / n
+    rng = random.Random(seed)
+    stats = []
+    for _ in range(n_boot):
+        sample = [clusters[rng.randrange(len(clusters))] for _ in clusters]
+        stats.append(sum(sum(c) for c in sample) / sum(len(c) for c in sample))
+    stats.sort()
+    return {"delta": round(delta, 4), "n": n,
+            "ci95": [round(stats[int(0.025 * n_boot)], 4), round(stats[int(0.975 * n_boot) - 1], 4)]}
+
+
+def compute_repair_metrics(results, metrics_out, table_out=None):
+    results = [r for r in results if r.get("domain") == "gsm8k"]
+    conditions = sorted({r.get("condition", "dialogue") for r in results})
+    judges = sorted({r["model"]["name"] for r in results})
+    out = {"baselines": repair_baselines(results), "conditions": {}, "rq3_gold_minus_dialogue": {}}
+    rows = []
+    for cond in conditions:
+        cr = [r for r in results if r.get("condition", "dialogue") == cond]
+        block = {}
+        for judge in ["ALL_JUDGES"] + judges:
+            jr = cr if judge == "ALL_JUDGES" else [r for r in cr if r["model"]["name"] == judge]
+            block[judge] = {}
+            for label, sub in _subsets(jr):
+                m = _acc_block(sub, pooled=(judge == "ALL_JUDGES"))
+                block[judge][label] = m
+                row = {"condition": cond, "judge": judge, "pair_type": label, "n": m["n"]}
+                for name in _ACC_KEYS:
+                    if m[name]:
+                        row[name] = m[name]["acc"]
+                        row[name + "_lo"], row[name + "_hi"] = m[name]["ci95"]
+                rows.append(row)
+        out["conditions"][cond] = block
+
+    if "gold" in conditions and "dialogue" in conditions:
+        g_all = [r for r in results if r.get("condition") == "gold"]
+        d_all = [r for r in results if r.get("condition") == "dialogue"]
+        for judge in ["ALL_JUDGES"] + judges:
+            out["rq3_gold_minus_dialogue"][judge] = {}
+            for label, g_sub in _subsets(g_all if judge == "ALL_JUDGES" else [r for r in g_all if r["model"]["name"] == judge]):
+                d_sub = dict(_subsets(d_all if judge == "ALL_JUDGES" else [r for r in d_all if r["model"]["name"] == judge]))[label]
+                out["rq3_gold_minus_dialogue"][judge][label] = {
+                    "joint_acc": paired_delta(g_sub, d_sub, "correct"),
+                    "winner_acc": paired_delta(g_sub, d_sub, "correct_verdict"),
+                }
+
+    os.makedirs(os.path.dirname(os.path.abspath(metrics_out)), exist_ok=True)
+    with open(metrics_out, "w") as f:
+        json.dump(out, f, indent=2)
+    table_out = table_out or os.path.splitext(metrics_out)[0] + "_table.csv"
+    if rows:
+        fields = ["condition", "judge", "pair_type", "n"] + [
+            k for name in _ACC_KEYS for k in (name, name + "_lo", name + "_hi")]
+        with open(table_out, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            w.writerows(rows)
+    _print_repair_summary(out)
+    print(f"\nRepair metrics saved -> {metrics_out}\nFlat table -> {table_out}")
+    return out
+
+
+def _fmt(m, key):
+    v = m.get(key)
+    if not v:
+        return "-"
+    lo, hi = v["ci95"]
+    ci = "" if lo is None else f" [{lo:.2f},{hi:.2f}]"
+    return f"{v['acc']:.2f}{ci}"
+
+
+def _print_repair_summary(out):
+    b = out["baselines"]
+    print("\nBaselines (winner accuracy):")
+    for label, v in b.items():
+        print(f"  {label:18s} n={v['n_pairs']:4d}  always-A={v['position_always_A']['winner_acc']}  "
+              f"agree-with-user={v['agree_with_user']['winner_acc']}")
+    for cond, block in out["conditions"].items():
+        print(f"\n== condition: {cond} ==")
+        print(f"  {'judge':20s} {'pair type':18s} {'n':>4s}  {'joint':18s} {'winner':18s} agree-w-user")
+        for judge, subs in block.items():
+            for label, m in subs.items():
+                print(f"  {judge:20s} {label:18s} {m['n']:4d}  {_fmt(m, 'joint_acc'):18s} "
+                      f"{_fmt(m, 'winner_acc'):18s} {_fmt(m, 'agree_with_user')}")
+    if out["rq3_gold_minus_dialogue"]:
+        print("\n== RQ3: gold - dialogue (joint acc) ==")
+        for judge, subs in out["rq3_gold_minus_dialogue"].items():
+            parts = [f"{label}={v['joint_acc']['delta']:+.3f} [{v['joint_acc']['ci95'][0]:+.2f},{v['joint_acc']['ci95'][1]:+.2f}]"
+                     for label, v in subs.items() if v["joint_acc"]]
+            print(f"  {judge:20s} " + "  ".join(parts))
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Compute metrics from match results")
-    p.add_argument("--matches", default="../outputs/mode_b/matches.json")
-    p.add_argument("--metrics-out", default="../outputs/mode_b/metrics.json")
+    p.add_argument("--matches", nargs="+", default=["../outputs/repair/matches_dialogue.json", "../outputs/repair/matches_gold.json"],
+                   help="Matches files: pass both the dialogue and gold files")
+    p.add_argument("--repair", action="store_true",
+                   help="Our metrics (joint/winner acc, CIs, baselines, RQ3 deltas). Without it: RankJudge BT-Elo (Mode A)")
+    p.add_argument("--metrics-out", default="../outputs/repair/metrics.json")
     p.add_argument("--init-elo", type=int, default=1500)
     p.add_argument("--top-pct", type=float, default=0.05,
                    help="Fraction of top-Elo pairs to remove for the top_removed slice")
@@ -187,9 +392,14 @@ def parse_args():
 
 def main():
     args = parse_args()
-    with open(args.matches) as f:
-        results = json.load(f)
-    compute_metrics(results, args)
+    results = []
+    for path in args.matches:
+        with open(path) as f:
+            results.extend(json.load(f))
+    if args.repair:
+        compute_repair_metrics(results, args.metrics_out)
+    else:
+        compute_metrics(results, args)
 
 
 if __name__ == "__main__":

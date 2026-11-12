@@ -1,106 +1,26 @@
-"""Generate conversation pairs for RankJudge."""
+"""Generate GSM8K user-correction conversation pairs.
 
-import argparse, hashlib, json, os, random
+Each pair is a 2-round / 4-turn conversation:
+  turn 1  USER       the GSM8K question                                   (template)
+  turn 2  ASSISTANT  first answer: gold rationale OR a generated wrong one  (template / 1 LLM call per problem)
+  turn 3  USER       repair, e.g. "Shouldn't it be X?"                      (template)
+  turn 4  ASSISTANT  good vs. bad final response                          (1 LLM call per pair)
+Turns 1-3 are identical inside a pair; only turn 4 (= round 2) differs.
+"""
+
+import argparse, hashlib, json, os, random, re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils import call_structured, load_api_key, load_ml, load_med, load_fin, seed_everything
-from prompts import GOOD_CONVO, WORSE_CONVO
-from taxonomy import ASSISTANT_BEHAVIORS, USER_BEHAVIORS
-from schemas import GOOD_CONVO_SCHEMA, WORSE_CONVO_SCHEMA
-from sampler import sample_params
-
-
-def generate_good_convo(paper, n_rounds, model_id, api_key, api_url, max_tokens,
-                        user_behavior_type, assistant_virtue, flaw_name, assistant_flaw):
-    """Generate a high-quality multi-turn conversation grounded in the item's context."""
-    prompt = GOOD_CONVO.format(
-        context=paper["context"], n=n_rounds,
-        user_behavior_name=user_behavior_type,
-        user_behavior_desc=USER_BEHAVIORS[user_behavior_type],
-        assistant_virtue=assistant_virtue,
-        flaw_name=flaw_name,
-        assistant_flaw=assistant_flaw)
-    result, _ = call_structured(model_id, prompt, api_key, api_url, GOOD_CONVO_SCHEMA, max_tokens)
-    return result["conversation"], result.get("plan", "")
-
-
-def generate_worse_convo(paper, n_rounds, model_id, api_key, api_url, max_tokens,
-                         behavior_type, user_behavior_type):
-    """Generate a conversation with a specific assistant weakness injected into one turn."""
-    prompt = WORSE_CONVO.format(
-        context=paper["context"], n=n_rounds,
-        behavior_type=behavior_type,
-        behavior_desc=ASSISTANT_BEHAVIORS[behavior_type]["flaw"],
-        user_behavior_name=user_behavior_type,
-        user_behavior_desc=USER_BEHAVIORS[user_behavior_type])
-    result, _ = call_structured(model_id, prompt, api_key, api_url, WORSE_CONVO_SCHEMA, max_tokens)
-    plan = result.get("plan", {})
-    return result["conversation"], plan.get("reasoning", ""), plan.get("bad_round_index")
-
-
-def validate_convo(convo, n_rounds, label):
-    """Check that a conversation has exactly n_rounds rounds (user+assistant pairs)."""
-    expected_turns = n_rounds * 2
-    actual_turns = len(convo)
-    if actual_turns != expected_turns:
-        raise ValueError(f"{label}: expected {n_rounds} rounds ({expected_turns} turns), got {actual_turns} turns")
-
+from utils import (call_structured, get_api_key, resolve_api_url, load_gsm8k, seed_everything,
+                   extract_final_number, format_number, numbers_equal, parse_number)
+from prompts import WRONG_SOLUTION, FINAL_TURN_WRONG_CORRECTION, FINAL_TURN_RIGHT_CORRECTION
+from taxonomy import PAIR_TYPE_TO_BEHAVIOR
+from schemas import WRONG_SOLUTION_SCHEMA, FINAL_TURN_SCHEMA
+from sampler import sample_repair_params
 
 
 def make_id(domain, raw_id):
     return hashlib.sha256(f"{domain}:{raw_id}".encode()).hexdigest()[:12]
-
-
-def process_paper(paper, domain, model_id, api_key, api_url, max_tokens, uniform=True, max_retries=3):
-    """Create a good/bad conversation pair for one item with randomized behaviors and ordering."""
-    params = sample_params(uniform=uniform)
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            good_convo, good_plan = generate_good_convo(
-                paper, params["n_rounds"], model_id, api_key, api_url, max_tokens,
-                params["user_behavior_type"],
-                ASSISTANT_BEHAVIORS[params["assistant_behavior_type"]]["virtue"],
-                params["assistant_behavior_type"],
-                ASSISTANT_BEHAVIORS[params["assistant_behavior_type"]]["flaw"])
-            validate_convo(good_convo, params["n_rounds"], "good_convo")
-            break
-        except ValueError as e:
-            print(f"  [{make_id(domain, paper['id'])}] good_convo validation failed (attempt {attempt}/{max_retries}): {e}", flush=True)
-            if attempt == max_retries:
-                raise
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            bad_convo, bad_plan, bad_round_index = generate_worse_convo(
-                paper, params["n_rounds"], model_id, api_key, api_url, max_tokens,
-                params["assistant_behavior_type"], params["user_behavior_type"])
-            validate_convo(bad_convo, params["n_rounds"], "bad_convo")
-            break
-        except ValueError as e:
-            print(f"  [{make_id(domain, paper['id'])}] bad_convo validation failed (attempt {attempt}/{max_retries}): {e}", flush=True)
-            if attempt == max_retries:
-                raise
-
-    pid = make_id(domain, paper["id"])
-    print(f"  [{pid}] validation passed: {params['n_rounds']} rounds, bad_round_index={bad_round_index}", flush=True)
-
-    better_is_a = random.random() < 0.5
-    convo_a, convo_b = (good_convo, bad_convo) if better_is_a else (bad_convo, good_convo)
-    return {
-        "id": pid,
-        "domain": domain,
-        "convo_a": convo_a, "convo_b": convo_b,
-        "better_is_a": better_is_a,
-        "plan": {"good": good_plan, "bad": bad_plan},
-        "metadata": {
-            "user_behavior_type": params["user_behavior_type"],
-            "assistant_behavior_type": params["assistant_behavior_type"],
-            "n_rounds": params["n_rounds"],
-            "bad_round_index": bad_round_index,
-            "context": paper["context"],
-        },
-    }
 
 
 def load_state(args):
@@ -118,60 +38,213 @@ def save_pairs(path, results):
         json.dump(results, f, indent=2)
 
 
-def run_generation(papers, domain, results, done_ids, args):
-    """Process all items in parallel and write conversation pairs to output file."""
-    papers = [p for p in papers if make_id(domain, p["id"]) not in done_ids]
-    print(f"Processing {len(papers)} {domain} papers with {args.model}...", flush=True)
+def _format_convo_text(convo):
+    return "\n\n".join(f"{'USER' if t['role'] == 'user' else 'ASSISTANT'}: {t['content']}" for t in convo)
+
+
+def correct_first_answer(problem):
+    """Turn 2 when the assistant is right: the cleaned GSM8K rationale + a fixed closing line."""
+    return f"{problem['gold_rationale']}\nThe answer is {problem['gold_answer']}."
+
+
+def wrong_value_candidates(problem):
+    """Plausible wrong answers W, most natural first. Chosen by code, not by the model.
+
+    1. intermediate results of the gold solution, last first (= "stopped a step early"
+       or "used the wrong intermediate value");
+    2. generic slips: x2, /2, +1, -1 (+2, +10 as a last resort).
+    Values differ from the gold answer, are positive when the gold is, and are integers
+    when the gold is.
+    """
+    gold = parse_number(problem["gold_answer"])
+    inter = [parse_number(x) for x in re.findall(r"<<[^>]*?=([^>]+)>>", problem.get("gold_solution", ""))]
+    generic = [gold * 2, gold / 2, gold + 1, gold - 1, gold + 2, gold + 10]
+    out = []
+    for v in list(reversed(inter)) + generic:
+        if v is None or (gold > 0 and v <= 0) or numbers_equal(v, gold):
+            continue
+        if gold == gold.to_integral_value() and v != v.to_integral_value():
+            continue
+        f = format_number(v)
+        if f not in out:
+            out.append(f)
+    return out
+
+
+def generate_wrong_solution(problem, model_id, api_key, api_url, max_tokens, max_retries=3):
+    """Turn 2 when the assistant is wrong: code picks W, the model writes a solution reaching W.
+
+    The same W is reused as the user's (incorrect) correction in the wrong_correction
+    pair, so both pairs from one problem share {gold, W}. If the model cannot reach a W
+    after two tries, the next candidate is used.
+    """
+    gold = problem["gold_answer"]
+    cands = wrong_value_candidates(problem)
+    if not cands:
+        raise ValueError("no plausible wrong value")
+    last_err = None
+    for attempt in range(max_retries):
+        wrong = cands[min(attempt // 2, len(cands) - 1)]
+        prompt = WRONG_SOLUTION.format(question=problem["question"], gold=gold, wrong=wrong,
+                                       gold_rationale=problem["gold_rationale"])
+        result, _ = call_structured(model_id, prompt, api_key, api_url, WRONG_SOLUTION_SCHEMA, max_tokens)
+        solution = result["solution"].strip()
+        if not numbers_equal(extract_final_number(solution), wrong):
+            last_err = f"solution ends with {extract_final_number(solution)}, expected {wrong}"
+        else:
+            return {"solution": solution, "wrong_answer": wrong, "mistake": result["mistake"],
+                    "wrong_candidates": cands}
+        print(f"  [{problem['id']}] wrong-solution check failed (attempt {attempt + 1}/{max_retries}): {last_err}", flush=True)
+    raise ValueError(f"wrong solution failed: {last_err}")
+
+
+def build_prefix(problem, pair_type, wrong, repair):
+    """Turns 1-3 (shared by both conversations in a pair) plus the bookkeeping values."""
+    gold, w = problem["gold_answer"], wrong["wrong_answer"]
+    if pair_type == "wrong_correction":      # assistant right, user wrong
+        first_text, first_val, user_val = correct_first_answer(problem), gold, w
+    else:                                    # right_correction: assistant wrong, user right
+        first_text, first_val, user_val = wrong["solution"], w, gold
+    prefix = [
+        {"role": "user", "content": problem["question"]},
+        {"role": "assistant", "content": first_text},
+        {"role": "user", "content": repair["repair_template"].format(x=user_val)},
+    ]
+    return prefix, first_val, user_val
+
+
+def generate_final_turns(problem, pair_type, prefix, first_val, user_val,
+                         model_id, api_key, api_url, max_tokens):
+    """Turn 4: one LLM call returns both the good and the bad final response."""
+    template = FINAL_TURN_WRONG_CORRECTION if pair_type == "wrong_correction" else FINAL_TURN_RIGHT_CORRECTION
+    prompt = template.format(question=problem["question"], gold=problem["gold_answer"],
+                             convo=_format_convo_text(prefix), first=first_val, user_value=user_val)
+    result, _ = call_structured(model_id, prompt, api_key, api_url, FINAL_TURN_SCHEMA, max_tokens)
+    return result["good_response"].strip(), result["bad_response"].strip(), result.get("plan", "")
+
+
+def make_gsm8k_pair(problem, pair_type, wrong, model_id, api_key, api_url, max_tokens, max_retries=3):
+    behavior = PAIR_TYPE_TO_BEHAVIOR[pair_type]
+    repair = sample_repair_params()
+    prefix, first_val, user_val = build_prefix(problem, pair_type, wrong, repair)
+    gold = problem["gold_answer"]
+    # Value the bad final turn should end on: the user's wrong value (capitulation)
+    # or the assistant's own wrong first answer (failure to revise). Either way = W.
+    bad_val = user_val if pair_type == "wrong_correction" else first_val
+    for attempt in range(1, max_retries + 1):
+        good, bad, plan = generate_final_turns(problem, pair_type, prefix, first_val, user_val,
+                                               model_id, api_key, api_url, max_tokens)
+        g, b = extract_final_number(good), extract_final_number(bad)
+        if numbers_equal(g, gold) and numbers_equal(b, bad_val):
+            break
+        print(f"  [{problem['id']}] {pair_type}: final turns end on good={g}, bad={b} "
+              f"(want {gold}, {bad_val}); attempt {attempt}/{max_retries}", flush=True)
+    # A pair that still ends on the wrong numbers is kept here and dropped by verify.py.
+
+    good_convo = prefix + [{"role": "assistant", "content": good}]
+    bad_convo = prefix + [{"role": "assistant", "content": bad}]
+    better_is_a = random.random() < 0.5
+    convo_a, convo_b = (good_convo, bad_convo) if better_is_a else (bad_convo, good_convo)
+    # The conversation whose final answer matches the user's correction ("agree-with-user"):
+    # bad convo for wrong_correction, good convo for right_correction.
+    agree_is_good = pair_type == "right_correction"
+    user_agree_is_a = better_is_a if agree_is_good else not better_is_a
+
+    return {
+        "id": make_id("gsm8k", f"{problem['id']}:{pair_type}"),
+        "domain": "gsm8k",
+        "convo_a": convo_a, "convo_b": convo_b,
+        "better_is_a": better_is_a,
+        "plan": {"good": plan, "bad": plan},   # one generator call wrote both final turns
+        "metadata": {
+            "problem_id": problem["id"],
+            "pair_type": pair_type,
+            "assistant_behavior_type": behavior,
+            "user_behavior_type": f"repair:{repair['repair_strategy']}",
+            "repair_strategy": repair["repair_strategy"],
+            "repair_template": repair["repair_template"],
+            "n_rounds": 2,
+            "bad_round_index": 2,          # round 2 = turn 4 (the final assistant message)
+            "gold_answer": gold,
+            "wrong_answer": wrong["wrong_answer"],
+            "first_answer_value": first_val,
+            "user_correction_value": user_val,
+            "good_final_value": gold,
+            "bad_final_value": bad_val,
+            "user_agree_is_a": user_agree_is_a,
+            "wrong_solution_mistake": wrong["mistake"],
+            "context": problem["question"],   # never contains the gold answer
+        },
+    }
+
+
+def process_problem(problem, model_id, api_key, api_url, max_tokens, pair_types):
+    """One problem -> up to two pairs (wrong_correction, right_correction)."""
+    wrong = generate_wrong_solution(problem, model_id, api_key, api_url, max_tokens)
+    out = []
+    for pt in pair_types:
+        try:
+            out.append(make_gsm8k_pair(problem, pt, wrong, model_id, api_key, api_url, max_tokens))
+        except Exception as e:
+            print(f"  [{problem['id']}] {pt} - ERROR: {e}", flush=True)
+    return out
+
+
+def run_generation_gsm8k(problems, results, done_ids, args):
+    def todo(p):
+        return [pt for pt in args.pair_types if make_id("gsm8k", f"{p['id']}:{pt}") not in done_ids]
+    jobs = [(p, todo(p)) for p in problems]
+    jobs = [(p, pts) for p, pts in jobs if pts]
+    print(f"Processing {len(jobs)} gsm8k problems with {args.model}...", flush=True)
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(process_paper, p, domain, args.model, args.api_key,
-                          args.api_url, args.max_tokens, args.uniform): p for p in papers}
+        futs = {ex.submit(process_problem, p, args.model, args.api_key, args.api_url,
+                          args.max_tokens, pts): p for p, pts in jobs}
         for i, fut in enumerate(as_completed(futs), 1):
-            paper = futs[fut]
+            problem = futs[fut]
             try:
-                results.append(fut.result())
-                print(f"[{i}/{len(papers)}] {paper['id']} - done ({len(results)} pairs)", flush=True)
+                new = fut.result()
+                results.extend(new)
+                print(f"[{i}/{len(jobs)}] {problem['id']} - {len(new)} pairs ({len(results)} total)", flush=True)
             except Exception as e:
-                print(f"[{i}/{len(papers)}] {paper['id']} - ERROR: {e}", flush=True)
+                print(f"[{i}/{len(jobs)}] {problem['id']} - ERROR: {e}", flush=True)
             if i % args.save_interval == 0:
                 save_pairs(args.out, results)
                 print(f"Saved -> {args.out}", flush=True)
     save_pairs(args.out, results)
-    print(f"Done {domain}. {len(results)} total pairs -> {args.out}")
+    print(f"Done gsm8k. {len(results)} total pairs -> {args.out}")
 
 
 def parse_args():
-    """Parse command-line arguments for pair generation."""
-    p = argparse.ArgumentParser(description="Generate conversation pairs for RankJudge")
-    p.add_argument("--data-dir", default="../data", help="Directory for cached data")
-    p.add_argument("--out", default="../outputs/mode_b/pairs.json")
+    p = argparse.ArgumentParser(description="Generate GSM8K user-correction pairs")
+    p.add_argument("--data-dir", default="../data", help="Directory holding input/gsm8k.json")
+    p.add_argument("--out", default="../outputs/repair/pairs.json")
     p.add_argument("--api-key-path", default="../api_key.json")
-    p.add_argument("--api-url", default="https://openrouter.ai/api/v1/chat/completions")
-    p.add_argument("--model", default="openai/gpt-5.5")
+    p.add_argument("--backend", default="local",
+                   help="'local' (Ollama/vLLM, default), 'openrouter', or a full chat-completions URL")
+    p.add_argument("--model", default="gemma3:12b",
+                   help="Model name on that backend, e.g. gemma3:12b (local) or openai/gpt-5.5 (openrouter)")
     p.add_argument("--max-tokens", type=int, default=1024 * 32)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--workers", type=int, default=10)
-    p.add_argument("--n-samples", type=int, default=10)
+    p.add_argument("--workers", type=int, default=2, help="Parallel requests (local: 1-4; OpenRouter: 20)")
+    p.add_argument("--n-samples", type=int, default=10, help="Number of GSM8K problems to use")
     p.add_argument("--save-interval", type=int, default=10)
     p.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
-    p.add_argument("--uniform", action=argparse.BooleanOptionalAction, default=True,
-                   help="Sample params uniformly over keys (default). Use --no-uniform to follow DISTRIBUTIONS weights in sampler.py.")
-    p.add_argument("--dataset", choices=["ml", "med", "fin"], nargs="*", default=["ml", "med", "fin"],
-                   help="Domains to run (default: all three). E.g. --dataset ml fin")
+    p.add_argument("--pair-types", nargs="*", default=["wrong_correction", "right_correction"],
+                   choices=["wrong_correction", "right_correction"],
+                   help="Which pair types to build per problem (default: both)")
     return p.parse_args()
 
 
 def main():
-    """Load papers, seed RNG, and run parallel pair generation."""
     args = parse_args()
-    args.api_key = load_api_key(args.api_key_path)
+    args.api_url = resolve_api_url(args.backend)
+    args.api_key = get_api_key(args.api_key_path, [args.api_url])
+    print(f"Generator: {args.model} @ {args.api_url}", flush=True)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     results, done_ids = load_state(args)
-    loaders = {"ml": load_ml, "med": load_med, "fin": load_fin}
-    for domain in args.dataset:
-        print(f"\n{'='*60}\nDomain: {domain}\n{'='*60}", flush=True)
-        seed_everything(args.seed)
-        papers = loaders[domain](args.data_dir, args.n_samples)
-        run_generation(papers, domain, results, done_ids, args)
+    seed_everything(args.seed)
+    problems = load_gsm8k(args.data_dir, args.n_samples)
+    run_generation_gsm8k(problems, results, done_ids, args)
 
 
 if __name__ == "__main__":

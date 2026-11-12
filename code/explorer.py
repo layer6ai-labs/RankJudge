@@ -1,23 +1,15 @@
-"""Streamlit per-pair explorer for RankJudge.
+"""Streamlit per-pair explorer.
 
-Two modes for the two ways the data can live:
-
-  Mode A (default) -- load the released Layer6/RankJudge dataset from
-                      Hugging Face (`pairs` + `matches` configs). The
-                      published slice is already filtered, so there is
-                      no separate "all" view and no verification record.
-
-  Mode B           -- load the full local pipeline output from a from-scratch
-                      run (`outputs/mode_b/`): pairs.json, pairs_filtered.json,
-                      verification.json, matches.json.
+  Mode A (default) -- the released Layer6/RankJudge dataset from Hugging Face
+                      (original RankJudge baseline; no verification records).
+  Mode B           -- our local GSM8K run: pairs.json, pairs_filtered.json,
+                      verification.json, and one matches file.
 
 Run from `code/`:
 
-  streamlit run explorer.py                          # Mode A
-  streamlit run explorer.py -- --mode b              # Mode B (from-scratch run)
-  streamlit run explorer.py -- --mode b --dir ../outputs/mode_b
-
-Requires `streamlit` in addition to the base deps.
+  streamlit run explorer.py                                            # Mode A
+  streamlit run explorer.py -- --mode b --dir ../outputs/repair        # our run, dialogue condition
+  streamlit run explorer.py -- --mode b --dir ../outputs/repair --matches-file matches_gold.json
 """
 
 import argparse, json, os, re, sys
@@ -29,7 +21,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--mode", choices=["a", "b"], default="a",
                    help="a: released HF dataset (default); b: local pipeline outputs")
-    p.add_argument("--dir", default="../outputs/mode_b",
+    p.add_argument("--dir", default="../outputs/repair",
                    help="local pipeline dir (Mode B inputs)")
     p.add_argument("--repo", default="Layer6/RankJudge",
                    help="(Mode A) HF dataset repo id")
@@ -40,7 +32,12 @@ def parse_args():
                    help="(Mode B) BT anchor for the top_removed cut")
     p.add_argument("--top-pct", type=float, default=0.05,
                    help="(Mode B) top fraction by pair Elo dropped for top_removed")
+    p.add_argument("--matches-file", default="matches_dialogue.json",
+                   help="matches file inside --dir: matches_dialogue.json or matches_gold.json")
     return p.parse_args(sys.argv[1:])
+
+
+MATCHES_FILE = "matches_dialogue.json"   # set from --matches-file
 
 
 def load_json(path):
@@ -68,7 +65,7 @@ def load_local(data_dir, init_elo, top_pct):
     pairs = load_json(os.path.join(data_dir, "pairs.json"))
     pairs_filtered = load_json(os.path.join(data_dir, "pairs_filtered.json"))
     verification = load_json(os.path.join(data_dir, "verification.json"))
-    matches = load_json(os.path.join(data_dir, "matches.json"))
+    matches = load_json(os.path.join(data_dir, MATCHES_FILE))
     by_pair = {}
     for m in matches:
         by_pair.setdefault(m["id"], []).append(m)
@@ -171,11 +168,7 @@ def apply_filters(pair_list, verif, by_pair, f, has_verif):
             return False
         if has_verif and f["verif_passed"] != "any":
             v = verif.get(p["id"])
-            passed = bool(v and v["coherence"]["good_ok"] and v["coherence"]["bad_ok"]
-                          and v["adherence"]["good_followed"] and v["adherence"]["bad_followed"]
-                          and v["adherence"]["bad_flaw_round_correct"]
-                          and (v["grounding"]["good"].get("grounded_rate") == 1.0)
-                          and (v["grounding"]["bad"].get("grounded_rate") == 1.0))
+            passed = bool(v and v.get("passed"))
             if f["verif_passed"] == "passed" and not passed:
                 return False
             if f["verif_passed"] == "failed" and passed:
@@ -308,11 +301,11 @@ def render_overview(pair, sig, verif):
     g3.metric("bad_round_acc", fmt(sig["round_acc"]))
     g4.metric("behavior_acc", fmt(sig["behavior_acc"]))
 
+    if m.get("pair_type"):
+        st.write(f"**pair_type:** {m['pair_type']}  |  gold={m['gold_answer']}  |  first answer={m['first_answer_value']}  |  "
+                 f"user says={m['user_correction_value']}  |  good ends={m['good_final_value']}  |  bad ends={m['bad_final_value']}")
     if verif:
-        c, a = verif["coherence"], verif["adherence"]
-        st.caption(f"verification: coherence(good={ok_icon(c['good_ok'])}, bad={ok_icon(c['bad_ok'])}) | "
-                   f"adherence(good={ok_icon(a['good_followed'])}, bad={ok_icon(a['bad_followed'])}, flaw_round={ok_icon(a['bad_flaw_round_correct'])}) | "
-                   f"grounding(good={verif['grounding']['good'].get('grounded_rate')}, bad={verif['grounding']['bad'].get('grounded_rate')})")
+        st.caption(f"verification: {'PASS' if verif['passed'] else 'FAIL: ' + ', '.join(verif['failed'])}")
 
     with st.expander("Reference context (paper / source)", expanded=False):
         st.text(m.get("context", ""))
@@ -363,45 +356,12 @@ def render_verification(verif):
     if not verif:
         st.info("No verification record for this pair.")
         return
-    c, a, g = verif["coherence"], verif["adherence"], verif["grounding"]
-    st.subheader("Coherence (is the plan internally consistent?)")
-    st.write(f"good_ok: {ok_icon(c['good_ok'])}  |  bad_ok: {ok_icon(c['bad_ok'])}")
-    if c.get("good_issue"):
-        st.error(f"good_issue: {c['good_issue']}")
-    if c.get("bad_issue"):
-        st.error(f"bad_issue: {c['bad_issue']}")
-
-    st.subheader("Adherence (did the convo follow the plan?)")
-    st.write(f"good_followed: {ok_icon(a['good_followed'])}  |  bad_followed: {ok_icon(a['bad_followed'])}  |  "
-             f"bad_flaw_round_correct: {ok_icon(a['bad_flaw_round_correct'])}")
-    if a.get("good_issue"):
-        st.error(f"good_issue: {a['good_issue']}")
-    if a.get("bad_issue"):
-        st.error(f"bad_issue: {a['bad_issue']}")
-
-    st.subheader("Grounding (are assistant claims supported by the source?)")
-    st.caption("The bad convo's flawed round is excluded from grounding (flaw may be intentionally ungrounded).")
-    for label in ("good", "bad"):
-        gg = g[label]
-        rounds = gg.get("rounds", [])
-        rate = gg.get("grounded_rate")
-        total = sum(len(r["claims"]) for r in rounds)
-        grounded = sum(1 for r in rounds for c in r["claims"] if c.get("grounded"))
-        ungrounded = total - grounded
-        rate_s = f"{rate:.0%}" if isinstance(rate, (int, float)) else str(rate)
-        st.markdown(f"**{label} convo** - grounded_rate: `{rate_s}`  |  "
-                    f"claims: {total}  |  grounded: {grounded}  |  ungrounded: {ungrounded}")
-        if not rounds:
-            st.caption("(no rounds scored)")
-            continue
-        for r in rounds:
-            claims = r.get("claims", [])
-            n_ok = sum(1 for c in claims if c.get("grounded"))
-            n_bad = len(claims) - n_ok
-            head = f"Round {r['round_index']}  -  {n_ok}/{len(claims)} grounded" + (f"  ({n_bad} ungrounded)" if n_bad else "")
-            with st.expander(head, expanded=bool(n_bad)):
-                for c in claims:
-                    st.markdown(f"- {ok_icon(c.get('grounded'))}  {c['claim']}")
+    st.subheader("Verification checks")
+    for k, v in verif["checks"].items():
+        st.write(f"{ok_icon(v)}  {k}")
+    if verif.get("llm"):
+        st.subheader("LLM audit")
+        st.json(verif["llm"])
 
 
 def render_judges(pair, matches_for_pair):
@@ -454,8 +414,10 @@ def main():
             st.error(f"Failed to load `{args.repo}` from Hugging Face: {e}")
             return
     else:
+        global MATCHES_FILE
+        MATCHES_FILE = args.matches_file
         data_dir = os.path.abspath(args.dir)
-        st.caption(f"Mode B -- local data dir: `{data_dir}`")
+        st.caption(f"Mode B -- local data dir: `{data_dir}`, matches: `{args.matches_file}`")
         try:
             pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids = load_local(
                 data_dir, args.init_elo, args.top_pct)
