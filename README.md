@@ -44,7 +44,60 @@ python scripts/smoke_test_repair.py                      # should end with "SMOK
 streamlit run code/explorer.py                           # browse the dataset at http://localhost:8501
 ```
 
-In the explorer sidebar, pick `outputs/repair` as the data source.
+### 3. Download the data (free, no API key)
+
+```bash
+cd code && python preprocessing/gsm8k.py --n 300
+```
+
+This downloads GSM8K from Hugging Face, samples 300 problems (fixed seed, so everyone gets the
+same ones), and writes **`data/input/gsm8k.json`**. The `data/` folder is git-ignored, so each
+teammate runs this once.
+
+### 4. Look at the data in the browser
+
+```bash
+streamlit run code/data_viewer.py
+```
+
+Opens http://localhost:8501. The **GSM8K problems** page shows summary numbers, charts, a
+searchable table, and each problem with its answer and solution. Stop it with `Ctrl+C`.
+
+### 5. Check the code works (free, no API key)
+
+```bash
+python scripts/smoke_test_repair.py      # should end with "SMOKE TEST PASSED"
+```
+
+This runs the whole pipeline with fake model answers.
+
+### 6. Set up local models (Ollama)
+
+We run every model locally with [Ollama](https://ollama.com). No API key, no cost.
+
+1. Install Ollama: download it from https://ollama.com/download (or `brew install ollama` on a
+   Mac). If the Ollama app is running, the server is already on; otherwise start it in a
+   separate terminal:
+
+   ```bash
+   OLLAMA_CONTEXT_LENGTH=8192 ollama serve
+   ```
+
+   The longer context (8192 tokens) is needed because the judge prompt is long. If you use the
+   Ollama app instead, set **Context length** to 8k or more in its settings.
+
+2. Download the models (about 27 GB in total, once):
+
+   ```bash
+   ollama pull gemma3:12b      # generator: writes the conversations (never used as a judge)
+   ollama pull llama3.1:8b     # judges ↓
+   ollama pull llama3.2:3b
+   ollama pull gemma3:4b
+   ollama pull mistral:7b
+   ollama pull qwen2.5:7b
+   ```
+
+3. Check that it works:
 
 ### The dataset: `outputs/repair/`
 
