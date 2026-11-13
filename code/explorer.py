@@ -1,15 +1,12 @@
-"""Streamlit per-pair explorer. Pick the data source in the sidebar:
+"""Streamlit per-pair explorer for our runs under outputs/ (default: outputs/repair).
 
-  RankJudge (Hugging Face) -- the released Layer6/RankJudge dataset
-                              (original RankJudge baseline; no verification records).
-  outputs/<run>            -- one of our runs. Needs only pairs.json; verification.json,
-                              pairs_filtered.json and the judge matches files are shown
-                              when they exist, so pairs can be browsed before judging.
+A run needs only pairs.json; verification.json, pairs_filtered.json and the judge
+matches files are shown when they exist, so pairs can be browsed before judging.
 
 Run from the repo root:
 
   streamlit run code/explorer.py
-  streamlit run code/explorer.py -- --mode b --dir outputs/repair      # preselect a run
+  streamlit run code/explorer.py -- --dir outputs/pilot      # preselect another run
 """
 
 import argparse, glob, json, os, re, sys
@@ -20,25 +17,17 @@ CODE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(CODE_DIR)
 OUTPUTS = os.path.join(ROOT, "outputs")
 sys.path.insert(0, CODE_DIR)   # metrics / utils imports work from any working directory
-HF_SOURCE = "RankJudge (Hugging Face)"
 MATCHES_FILES = {"dialogue only": "matches_dialogue.json", "with gold answer": "matches_gold.json"}
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["a", "b"], default=None,
-                   help="preselect the source: a = released HF dataset, b = a local run (--dir)")
     p.add_argument("--dir", default=None,
-                   help="local run dir to preselect, e.g. outputs/repair")
-    p.add_argument("--repo", default="Layer6/RankJudge",
-                   help="(Mode A) HF dataset repo id")
-    p.add_argument("--split", default="train", help="(Mode A) HF split")
-    p.add_argument("--cache-dir", default=os.path.join(ROOT, "data"),
-                   help="(Mode A) HF datasets cache dir")
+                   help="run dir to preselect (default: outputs/repair)")
     p.add_argument("--init-elo", type=int, default=1500,
-                   help="(Mode B) BT anchor for the top_removed cut")
+                   help="BT anchor for the top_removed cut")
     p.add_argument("--top-pct", type=float, default=0.05,
-                   help="(Mode B) top fraction by pair Elo dropped for top_removed")
+                   help="top fraction by pair Elo dropped for top_removed")
     p.add_argument("--matches-file", default="matches_dialogue.json",
                    help="matches file inside --dir: matches_dialogue.json or matches_gold.json")
     return p.parse_args(sys.argv[1:])
@@ -94,24 +83,6 @@ def load_local(data_dir, matches_file, init_elo, top_pct, signature):
     filtered_ids = {p["id"] for p in pairs_filtered}
     top_removed_ids = compute_top_removed_ids(matches, init_elo, top_pct)
     return pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids
-
-
-@st.cache_data(show_spinner="Loading Layer6/RankJudge from Hugging Face...")
-def load_hf(repo, split, cache_dir):
-    from datasets import load_dataset
-    ds_pairs = load_dataset(repo, "pairs", split=split, cache_dir=cache_dir)
-    ds_matches = load_dataset(repo, "matches", split=split, cache_dir=cache_dir)
-    pairs = [dict(r) for r in ds_pairs]
-    matches = [dict(r) for r in ds_matches]
-    # The published slice is already filtered. No verification records.
-    pairs_filtered = pairs
-    verif_by_id = {}
-    by_pair = {}
-    for m in matches:
-        by_pair.setdefault(m["id"], []).append(m)
-    filtered_ids = {p["id"] for p in pairs_filtered}
-    # The released slice is already top-removed, so there is no further cut.
-    return pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, set()
 
 
 def parse_judge_raw(raw):
@@ -179,13 +150,7 @@ def ok_icon(b):
 def apply_filters(pair_list, verif, by_pair, f, has_verif):
     def keep(p):
         meta = p["metadata"]
-        if f["domain"] and p["domain"] not in f["domain"]:
-            return False
-        if f["asst"] and meta["assistant_behavior_type"] not in f["asst"]:
-            return False
-        if f["user"] and meta["user_behavior_type"] not in f["user"]:
-            return False
-        if f["nrounds"] and meta["n_rounds"] not in f["nrounds"]:
+        if f["pair_type"] and meta["pair_type"] not in f["pair_type"]:
             return False
         if has_verif and f["verif_passed"] != "any":
             v = verif.get(p["id"])
@@ -217,41 +182,30 @@ def apply_filters(pair_list, verif, by_pair, f, has_verif):
     return result
 
 
-def render_sidebar(mode, pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids):
+def render_sidebar(pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids):
     has_verif = bool(verif_by_id)
-    has_all_view = mode == "b"
 
     st.sidebar.header("Pairs to browse")
-    if has_all_view:
-        pairs_final = [p for p in pairs_filtered if p["id"] in top_removed_ids]
-        options = [f"all ({len(pairs)})",
-                   f"filtered ({len(pairs_filtered)})"]
-        if top_removed_ids:
-            options.append(f"final ({len(pairs_final)})")
-        ds = st.sidebar.radio("Pairs to browse", options, index=1 if has_verif else 0,
-                              label_visibility="collapsed")
-        if ds.startswith("all"):
-            pair_list, viewing_all = pairs, True
-        elif ds.startswith("filtered"):
-            pair_list, viewing_all = pairs_filtered, False
-        else:  # final -- the published-style eval slice
-            pair_list, viewing_all = pairs_final, False
-            st.sidebar.caption("eval slice: trivial/incomplete + top-Elo pairs dropped")
-    else:
-        st.sidebar.caption(f"published slice ({len(pairs_filtered)} pairs)")
-        pair_list = pairs_filtered
-        viewing_all = False
+    pairs_final = [p for p in pairs_filtered if p["id"] in top_removed_ids]
+    options = [f"all ({len(pairs)})",
+               f"filtered ({len(pairs_filtered)})"]
+    if top_removed_ids:
+        options.append(f"final ({len(pairs_final)})")
+    ds = st.sidebar.radio("Pairs to browse", options, index=1 if has_verif else 0,
+                          label_visibility="collapsed")
+    if ds.startswith("all"):
+        pair_list, viewing_all = pairs, True
+    elif ds.startswith("filtered"):
+        pair_list, viewing_all = pairs_filtered, False
+    else:  # final -- the published-style eval slice
+        pair_list, viewing_all = pairs_final, False
+        st.sidebar.caption("eval slice: trivial/incomplete + top-Elo pairs dropped")
 
     st.sidebar.header("Filters")
-    domains = sorted({p["domain"] for p in pair_list})
-    assts = sorted({p["metadata"]["assistant_behavior_type"] for p in pair_list})
-    users = sorted({p["metadata"]["user_behavior_type"] for p in pair_list})
-    nrs = sorted({p["metadata"]["n_rounds"] for p in pair_list})
+    # domain, user behavior and n_rounds are the same for every GSM8K pair, so only pair type is filterable
+    pair_types = sorted({p["metadata"]["pair_type"] for p in pair_list})
     f = {
-        "domain": st.sidebar.multiselect("domain", domains),
-        "asst": st.sidebar.multiselect("assistant_behavior", assts),
-        "user": st.sidebar.multiselect("user_behavior", users),
-        "nrounds": st.sidebar.multiselect("n_rounds", nrs),
+        "pair_type": st.sidebar.multiselect("pair type", pair_types),
         "verif_passed": (st.sidebar.selectbox("verification passed",
                                               ["any", "passed", "failed"])
                          if (has_verif and viewing_all) else "any"),
@@ -423,31 +377,29 @@ def render_judges(pair, matches_for_pair):
 
 
 def choose_source(args):
-    """Sidebar: pick RankJudge (HF) or one of our runs. Returns (mode, data_dir, matches_file)."""
+    """Sidebar: pick one of our runs. Returns (data_dir, matches_file), or (None, None) if none exist."""
     runs = run_dirs()
-    labels = [os.path.relpath(d, ROOT) for d in runs] + [HF_SOURCE]
-    if args.mode == "a" or not runs:
-        default = HF_SOURCE
-    elif args.dir:
+    labels = [os.path.relpath(d, ROOT) for d in runs]
+    if not runs:
+        return None, None
+    if args.dir:
         want = os.path.relpath(os.path.abspath(os.path.join(ROOT, args.dir)
                                                if not os.path.isabs(args.dir) else args.dir), ROOT)
         default = want if want in labels else labels[0]
-    else:
-        default = labels[0]
+    else:   # the shared dataset, not whichever run is newest (e.g. the smoke test's fake data)
+        default = "outputs/repair" if "outputs/repair" in labels else labels[0]
     st.sidebar.header("Data source")
     src = st.sidebar.selectbox("Data source", labels, index=labels.index(default),
                                label_visibility="collapsed")
-    if src == HF_SOURCE:
-        return "a", None, None
     data_dir = os.path.join(ROOT, src)
     present = {k: v for k, v in MATCHES_FILES.items() if os.path.exists(os.path.join(data_dir, v))}
     if not present:
         st.sidebar.caption("No judge results in this folder yet.")
-        return "b", data_dir, args.matches_file
+        return data_dir, args.matches_file
     keys = list(present)
     pre = next((k for k, v in present.items() if v == args.matches_file), keys[0])
     cond = st.sidebar.radio("Judge condition", keys, index=keys.index(pre), horizontal=True)
-    return "b", data_dir, present[cond]
+    return data_dir, present[cond]
 
 
 def main():
@@ -456,28 +408,22 @@ def main():
     st.set_page_config(page_title="RepairJudge data explorer", layout="wide")
     st.title("RepairJudge data explorer")
 
-    args.mode, data_dir, matches_file = choose_source(args)
-    if args.mode == "a":
-        st.caption(f"Mode A -- released dataset `{args.repo}` (split: {args.split})")
-        try:
-            pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids = load_hf(
-                args.repo, args.split, os.path.abspath(args.cache_dir))
-        except Exception as e:
-            st.error(f"Failed to load `{args.repo}` from Hugging Face: {e}")
-            return
-    else:
-        has_matches = os.path.exists(os.path.join(data_dir, matches_file))
-        st.caption(f"Our run: `{os.path.relpath(data_dir, ROOT)}`"
-                   + (f", judges: `{matches_file}`" if has_matches else ", no judge results yet"))
-        try:
-            pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids = load_local(
-                data_dir, matches_file, args.init_elo, args.top_pct, files_signature(data_dir))
-        except FileNotFoundError as e:
-            st.error(f"Missing file in {data_dir}: {e}")
-            return
+    data_dir, matches_file = choose_source(args)
+    if data_dir is None:
+        st.error("No run found: `outputs/repair/pairs.json` is missing. Pull the latest repo (git pull).")
+        return
+    has_matches = os.path.exists(os.path.join(data_dir, matches_file))
+    st.caption(f"Our run: `{os.path.relpath(data_dir, ROOT)}`"
+               + (f", judges: `{matches_file}`" if has_matches else ", no judge results yet"))
+    try:
+        pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids = load_local(
+            data_dir, matches_file, args.init_elo, args.top_pct, files_signature(data_dir))
+    except FileNotFoundError as e:
+        st.error(f"Missing file in {data_dir}: {e}")
+        return
 
     sel = render_sidebar(
-        args.mode, pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids)
+        pairs, pairs_filtered, verif_by_id, by_pair, filtered_ids, top_removed_ids)
     if sel is None:
         return
 
@@ -491,17 +437,12 @@ def main():
 
     in_filtered = sel in filtered_ids
     badge = "[filtered-in]" if in_filtered else "[filtered-out]"
-    if args.mode == "a":
-        badge = "[published]"
-    elif sel in top_removed_ids:
+    if sel in top_removed_ids:
         badge += " [final]"
     st.markdown(f"### `{sel}` &nbsp; {badge}")
 
-    tab_labels = ["Overview", "Plan", "Conversations"]
-    if args.mode == "b":
-        tab_labels.append("Verification")
-    tab_labels.append(f"Judges ({len(matches_for_pair)})")
-    tabs = st.tabs(tab_labels)
+    tabs = st.tabs(["Overview", "Plan", "Conversations", "Verification",
+                    f"Judges ({len(matches_for_pair)})"])
 
     with tabs[0]:
         render_overview(pair, sig, verif)
@@ -509,14 +450,10 @@ def main():
         render_plan(pair)
     with tabs[2]:
         render_convos(pair)
-    if args.mode == "b":
-        with tabs[3]:
-            render_verification(verif)
-        with tabs[4]:
-            render_judges(pair, matches_for_pair)
-    else:
-        with tabs[3]:
-            render_judges(pair, matches_for_pair)
+    with tabs[3]:
+        render_verification(verif)
+    with tabs[4]:
+        render_judges(pair, matches_for_pair)
 
 
 if __name__ == "__main__":

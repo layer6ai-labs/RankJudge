@@ -40,11 +40,11 @@ so you don't need PACE, a GPU or GSM8K itself.
 git clone https://github.com/siwany/RepairJudge.git && cd RepairJudge
 python3 -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python scripts/smoke_test_repair.py                      # should end with "SMOKE TEST PASSED"
 streamlit run code/explorer.py                           # browse the dataset at http://localhost:8501
 ```
 
-In the explorer sidebar, pick `outputs/repair` as the data source.
+After changing code, run `python scripts/smoke_test_repair.py` (fake model answers, no GPU) to check
+the pipeline still runs end to end.
 
 ### The dataset: `outputs/repair/`
 
