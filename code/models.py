@@ -1,10 +1,10 @@
 """Judge pool.
 
 Each entry: judge_name (our label), model_id (the name the server knows), backend
-("local" = Ollama/vLLM on this machine, "openrouter" = API), and thinking flags.
+("local" = model server on this machine), and thinking flags.
 
-LOCAL_MODELS are the default. MODELS (the RankJudge list) are OpenRouter models,
-used only with --backend openrouter. JUDGE_SETS picks the five judges per backend.
+LOCAL_MODELS are the judges we use. MODELS (RankJudge's OpenRouter API models) is
+commented out: we do not use OpenRouter. JUDGE_SETS picks the five judges.
 """
 
 LOCAL_MODELS = [
@@ -23,168 +23,170 @@ LOCAL_MODELS = [
      "add_context": False, "support_thinking": False, "use_thinking": False},
 ]
 
-MODELS = [
-    {
-        "judge_name": "opus-4.7",
-        "openrouter_name": "anthropic/claude-opus-4.7",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "sonnet-4.6",
-        "openrouter_name": "anthropic/claude-sonnet-4.6",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "haiku-4.5",
-        "openrouter_name": "anthropic/claude-haiku-4.5",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gpt-5.5",
-        "openrouter_name": "openai/gpt-5.5",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gpt-5.4",
-        "openrouter_name": "openai/gpt-5.4",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gpt-5.4-mini",
-        "openrouter_name": "openai/gpt-5.4-mini",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gemini-3.1-pro",
-        "openrouter_name": "google/gemini-3.1-pro-preview",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gemini-3-flash",
-        "openrouter_name": "google/gemini-3-flash-preview",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "qwen3.6-plus",
-        "openrouter_name": "qwen/qwen3.6-plus",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "qwen3.5-397b-a17b",
-        "openrouter_name": "qwen/qwen3.5-397b-a17b",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "qwen3.5-122b-a10b",
-        "openrouter_name": "qwen/qwen3.5-122b-a10b",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "qwen3.5-35b-a3b",
-        "openrouter_name": "qwen/qwen3.5-35b-a3b",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "minimax-m2.7",
-        "openrouter_name": "minimax/minimax-m2.7",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "kimi-k2.6",
-        "openrouter_name": "moonshotai/kimi-k2.6",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "glm-5.1",
-        "openrouter_name": "z-ai/glm-5.1",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "deepseek-v3.2",
-        "openrouter_name": "deepseek/deepseek-v3.2",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gemma-4-26b-a4b",
-        "openrouter_name": "google/gemma-4-26b-a4b-it",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gemma-4-31b",
-        "openrouter_name": "google/gemma-4-31b-it",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "mistral-small-4-119b",
-        "openrouter_name": "mistralai/mistral-small-2603",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gpt-oss-120b",
-        "openrouter_name": "openai/gpt-oss-120b",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    },
-    {
-        "judge_name": "gpt-oss-20b",
-        "openrouter_name": "openai/gpt-oss-20b",
-        "add_context": True,
-        "support_thinking": True,
-        "use_thinking": True,
-    }
-]
+# OpenRouter API (from RankJudge) -- NOT USED: we only run local models on PACE.
+# MODELS = [
+#     {
+#         "judge_name": "opus-4.7",
+#         "openrouter_name": "anthropic/claude-opus-4.7",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "sonnet-4.6",
+#         "openrouter_name": "anthropic/claude-sonnet-4.6",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "haiku-4.5",
+#         "openrouter_name": "anthropic/claude-haiku-4.5",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gpt-5.5",
+#         "openrouter_name": "openai/gpt-5.5",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gpt-5.4",
+#         "openrouter_name": "openai/gpt-5.4",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gpt-5.4-mini",
+#         "openrouter_name": "openai/gpt-5.4-mini",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gemini-3.1-pro",
+#         "openrouter_name": "google/gemini-3.1-pro-preview",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gemini-3-flash",
+#         "openrouter_name": "google/gemini-3-flash-preview",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "qwen3.6-plus",
+#         "openrouter_name": "qwen/qwen3.6-plus",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "qwen3.5-397b-a17b",
+#         "openrouter_name": "qwen/qwen3.5-397b-a17b",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "qwen3.5-122b-a10b",
+#         "openrouter_name": "qwen/qwen3.5-122b-a10b",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "qwen3.5-35b-a3b",
+#         "openrouter_name": "qwen/qwen3.5-35b-a3b",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "minimax-m2.7",
+#         "openrouter_name": "minimax/minimax-m2.7",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "kimi-k2.6",
+#         "openrouter_name": "moonshotai/kimi-k2.6",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "glm-5.1",
+#         "openrouter_name": "z-ai/glm-5.1",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "deepseek-v3.2",
+#         "openrouter_name": "deepseek/deepseek-v3.2",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gemma-4-26b-a4b",
+#         "openrouter_name": "google/gemma-4-26b-a4b-it",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gemma-4-31b",
+#         "openrouter_name": "google/gemma-4-31b-it",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "mistral-small-4-119b",
+#         "openrouter_name": "mistralai/mistral-small-2603",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gpt-oss-120b",
+#         "openrouter_name": "openai/gpt-oss-120b",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     },
+#     {
+#         "judge_name": "gpt-oss-20b",
+#         "openrouter_name": "openai/gpt-oss-20b",
+#         "add_context": True,
+#         "support_thinking": True,
+#         "use_thinking": True,
+#     }
+# ]
+MODELS = []
 
 
 
-for _m in MODELS:
-    _m.setdefault("backend", "openrouter")
-    _m.setdefault("model_id", _m["openrouter_name"])
+# for _m in MODELS:
+#     _m.setdefault("backend", "openrouter")
+#     _m.setdefault("model_id", _m["openrouter_name"])
 
 ALL_MODELS = LOCAL_MODELS + MODELS
 
 # The five judges per backend. The generator is never a judge (self-preference bias):
-# local generator = gpt-oss:120b (on PACE), API generator = google/gemma-4-31b-it. matches.py --exclude-model
-# enforces this, so keep the generator out of these lists too.
+# generator = gpt-oss:120b (on PACE). matches.py --exclude-model enforces this, so keep the
+# generator out of these lists too.
 JUDGE_SETS = {
     "local": ["llama3.1-8b", "llama3.2-3b", "gemma3-4b", "mistral-7b", "qwen2.5-7b"],
-    "openrouter": ["sonnet-4.6", "gemini-3-flash", "gpt-5.4-mini", "qwen3.5-122b-a10b", "deepseek-v3.2"],
+    # "openrouter": ["sonnet-4.6", "gemini-3-flash", "gpt-5.4-mini", "qwen3.5-122b-a10b", "deepseek-v3.2"],  # not used
 }

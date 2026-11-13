@@ -220,12 +220,12 @@ def parse_args():
     p.add_argument("--out", default="../outputs/repair/pairs.json")
     p.add_argument("--api-key-path", default="../api_key.json")
     p.add_argument("--backend", default="local",
-                   help="'local' (Ollama/vLLM, default), 'openrouter', or a full chat-completions URL")
+                   help="'local' (model server at LOCAL_API_URL, default) or a full chat-completions URL")
     p.add_argument("--model", default="gpt-oss:120b",
-                   help="Model name on that backend, e.g. gpt-oss:120b (local, PACE) or google/gemma-4-31b-it (openrouter)")
+                   help="Model name on the server, e.g. gpt-oss:120b")
     p.add_argument("--max-tokens", type=int, default=1024 * 32)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--workers", type=int, default=2, help="Parallel requests (local: 1-4; OpenRouter: 20)")
+    p.add_argument("--workers", type=int, default=2, help="Parallel requests (16 is fine with vLLM)")
     p.add_argument("--n-samples", type=int, default=10, help="Number of GSM8K problems to use")
     p.add_argument("--save-interval", type=int, default=10)
     p.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)

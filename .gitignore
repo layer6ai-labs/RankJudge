@@ -12,8 +12,9 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
-# Project outputs
-outputs/
+# Project outputs (outputs/repair/ is the shared dataset and IS committed)
+outputs/*
+!outputs/repair/
 logs/
 data/
 models/
@@ -22,6 +23,7 @@ paper/
 wandb/
 mlruns/
 *.log
+*.sbatch
 
 # Archive
 archive/

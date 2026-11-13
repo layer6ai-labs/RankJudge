@@ -18,7 +18,11 @@ import pandas as pd
 import streamlit as st
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_PROBLEMS = os.path.join(ROOT, "data", "input", "gsm8k.json")
+# data/input/ exists after running preprocessing; outputs/repair/ after unzipping the shared dataset
+DEFAULT_PROBLEMS = next(
+    (p for p in (os.path.join(ROOT, "data", "input", "gsm8k.json"),
+                 os.path.join(ROOT, "outputs", "repair", "gsm8k.json")) if os.path.exists(p)),
+    os.path.join(ROOT, "data", "input", "gsm8k.json"))
 RUN_DIRS = ["outputs/pilot", "outputs/repair", "outputs/smoke"]
 
 
@@ -46,7 +50,8 @@ def page_problems():
     path = st.sidebar.text_input("Problems file", DEFAULT_PROBLEMS)
     problems = read(path)
     if problems is None:
-        st.warning(f"`{path}` not found. Create it with:\n\n"
+        st.warning(f"`{path}` not found. Unzip the shared dataset into `outputs/` "
+                   "(README step 3), or create it with:\n\n"
                    "```bash\ncd code && python preprocessing/gsm8k.py --n 300\n```")
         return
 
