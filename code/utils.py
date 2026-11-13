@@ -5,14 +5,47 @@ Shared helpers for the benchmark suite.
 import json
 import os
 import random
+import re
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 
 import numpy as np
 import requests
 
+# --- Backends ---
+# Every model is called through an OpenAI-compatible /v1/chat/completions endpoint on a
+# local model server (vLLM on PACE: LOCAL_API_URL=http://localhost:8000/v1/chat/completions).
+LOCAL_API_URL = os.environ.get("LOCAL_API_URL", "http://localhost:11434/v1/chat/completions")
+# OpenRouter API (from RankJudge) -- NOT USED: we only run local models on PACE.
+# OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def resolve_api_url(url):
+    """'local' / a full URL -> a full URL."""
+    if url in (None, "", "local"):
+        return LOCAL_API_URL
+    # OpenRouter API (from RankJudge) -- NOT USED: we only run local models on PACE.
+    # if url == "openrouter":
+    #     return OPENROUTER_API_URL
+    return url
+
+
+def is_openrouter(api_url):
+    return "openrouter.ai" in (api_url or "")
+
+
 def load_api_key(path):
     with open(path) as f:
         return json.load(f)["api_key"]
+
+
+def get_api_key(path, api_urls):
+    """API key only if some call goes to OpenRouter; local servers need none."""
+    if not any(is_openrouter(u) for u in api_urls):
+        return None
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} not found. OpenRouter needs an API key (not used in this project).")
+    return load_api_key(path)
 
 
 # --- Reproducibility ---
@@ -46,7 +79,7 @@ def load_jsonl(path):
 
 def call_openrouter(model_id, prompt, api_key, api_url, max_tokens=32768,
                     response_format=None, timeout=480, support_thinking=False, use_thinking=None):
-    """Call OpenRouter API and return parsed response content."""
+    """Call an OpenAI-compatible chat endpoint (our local model server; the name is from RankJudge)."""
     payload = {"model": model_id,
                "messages": [{"role": "user", "content": prompt}],
                "max_tokens": max_tokens}
@@ -54,12 +87,14 @@ def call_openrouter(model_id, prompt, api_key, api_url, max_tokens=32768,
         payload["response_format"] = response_format
     if use_thinking is None:
         use_thinking = support_thinking
-    if support_thinking and use_thinking:
-        payload["reasoning"] = {"enabled": True}
-    elif support_thinking and not use_thinking:
-        payload["reasoning"] = {"effort": "none"}
-    r = requests.post(api_url, headers={"Authorization": f"Bearer {api_key}"},
-                      json=payload, timeout=timeout)
+    # OpenRouter API (from RankJudge) -- NOT USED: we only run local models on PACE.
+    # if is_openrouter(api_url):   # "reasoning" is an OpenRouter-only field
+    #     if support_thinking and use_thinking:
+    #         payload["reasoning"] = {"enabled": True}
+    #     elif support_thinking and not use_thinking:
+    #         payload["reasoning"] = {"effort": "none"}
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    r = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
     r.raise_for_status()
     body = r.json()
     if "choices" not in body:
@@ -72,19 +107,78 @@ def call_openrouter(model_id, prompt, api_key, api_url, max_tokens=32768,
 
 def call_structured(model_id, prompt, api_key, api_url, schema, max_tokens=32768, max_retries=3,
                     support_thinking=False, use_thinking=None):
-    """Call OpenRouter with structured JSON output and retry on parse failures."""
-    resp_format = {"type": "json_schema",
-                   "json_schema": {"name": "response", "strict": True, "schema": schema}}
+    """Call a chat endpoint for a JSON object matching `schema`; retry on parse failures.
+
+    OpenRouter: the schema is enforced by the server (response_format=json_schema).
+    Local servers: schema-constrained decoding makes gpt-oss on vLLM emit endless
+    whitespace, so by default the schema goes into the prompt instead and the reply is
+    coerced to it (coerce_to_schema). Set LOCAL_JSON_SCHEMA=1 to enforce it server-side.
+    """
+    if is_openrouter(api_url) or os.environ.get("LOCAL_JSON_SCHEMA") == "1":
+        resp_format = {"type": "json_schema",
+                       "json_schema": {"name": "response", "strict": True, "schema": schema}}
+    else:
+        resp_format = None
+        prompt = (f"{prompt}\n\nReturn ONLY one JSON object (no code fences, no other text) "
+                  f"that matches this JSON schema. Use exactly the listed enum values.\n"
+                  f"{json.dumps(schema)}")
     for attempt in range(1, max_retries + 1):
         try:
             content, usage = call_openrouter(model_id, prompt, api_key, api_url,
                                              max_tokens=max_tokens, response_format=resp_format,
                                              support_thinking=support_thinking, use_thinking=use_thinking)
-            return json.loads(content), usage
-        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            result = parse_json_reply(content)
+            return (result if resp_format else coerce_to_schema(result, schema)), usage
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as e:
             print(f"  parse_fail attempt {attempt}/{max_retries}: {e}", flush=True)
             if attempt == max_retries:
                 raise
+
+
+def coerce_to_schema(obj, schema):
+    """Fix the usual near-misses of an unconstrained reply against a flat object schema.
+
+    52 -> "52" for strings; "keeps" -> "keeps_original" for enums (unique prefix match);
+    null / "true" / "no" -> bool for booleans. Raises KeyError for a missing required
+    field and ValueError for an enum value that cannot be matched, so the call retries.
+    """
+    if not isinstance(obj, dict):
+        raise ValueError(f"expected a JSON object, got {type(obj).__name__}")
+    out = {}
+    for key, spec in schema.get("properties", {}).items():
+        if key not in obj:
+            if key in schema.get("required", []):
+                raise KeyError(f"missing field {key!r}")
+            continue
+        v = obj[key]
+        if "enum" in spec:
+            s = str(v).strip().lower()
+            hits = [e for e in spec["enum"] if e == s] or [e for e in spec["enum"] if e.startswith(s) and s]
+            if len(hits) != 1:
+                raise ValueError(f"{key}={v!r} not in {spec['enum']}")
+            v = hits[0]
+        elif spec.get("type") == "boolean":
+            if not isinstance(v, bool):
+                v = str(v).strip().lower() in ("true", "yes", "1")   # null / "" / "no" -> False
+        elif spec.get("type") == "string":
+            v = "" if v is None else (v if isinstance(v, str) else json.dumps(v) if isinstance(v, (dict, list)) else str(v))
+        out[key] = v
+    return out
+
+
+def parse_json_reply(content):
+    """json.loads that tolerates ```json fences and text around the object (small local models)."""
+    text = (content or "").strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    # strict=False: accept raw newlines/tabs inside strings, which local models often emit
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start:end + 1], strict=False)
+        raise
 
 
 # --- Rating algorithms ---
@@ -186,40 +280,70 @@ def split_and_sort(elo, win_rates, se=None):
 
 # --- Data loading ---
 
-def load_ml(data_dir, n_samples=None):
-    """Load preprocessed ML (RPC-Bench) data. Run preprocessing/ml.py first."""
-    path = os.path.join(data_dir, "input", "ml.json")
+def load_gsm8k(data_dir, n_samples=None):
+    """Load preprocessed GSM8K problems. Run preprocessing/gsm8k.py first."""
+    path = os.path.join(data_dir, "input", "gsm8k.json")
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"{path} not found. Run: cd code && python preprocessing/ml.py")
+            f"{path} not found. Run: cd code && python preprocessing/gsm8k.py")
     print(f"Loading {path}", flush=True)
-    papers = load_jsonl(path)
+    problems = load_jsonl(path)
     if n_samples:
-        papers = papers[:n_samples]
-    return papers
+        problems = problems[:n_samples]
+    return problems
 
 
-def load_med(data_dir, n_samples=None):
-    """Load preprocessed Med (PubMedQA) data. Run preprocessing/med.py first."""
-    path = os.path.join(data_dir, "input", "med.json")
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"{path} not found. Run: cd code && python preprocessing/med.py")
-    print(f"Loading {path}", flush=True)
-    papers = load_jsonl(path)
-    if n_samples:
-        papers = papers[:n_samples]
-    return papers
+# --- Numeric helpers (GSM8K) ---
 
 
-def load_fin(data_dir, n_samples=None):
-    """Load preprocessed Fin (S&P 500 10-K) data. Run preprocessing/fin.py first."""
-    path = os.path.join(data_dir, "input", "fin.json")
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"{path} not found. Run: cd code && python preprocessing/fin.py")
-    print(f"Loading {path}", flush=True)
-    papers = load_jsonl(path)
-    if n_samples:
-        papers = papers[:n_samples]
-    return papers
+_NUM_RE = re.compile(r"-?\$?\d[\d,]*(?:\.\d+)?|-?\$?\.\d+")
+
+
+def parse_number(s):
+    """Parse '1,234', '$5.50', '18', '-3' -> Decimal. Returns None if unparseable."""
+    if s is None:
+        return None
+    if isinstance(s, (int, float, Decimal)):
+        return Decimal(str(s))
+    t = str(s).strip().replace(",", "").replace("$", "").rstrip(".")
+    try:
+        return Decimal(t)
+    except InvalidOperation:
+        pass
+    # Models sometimes wrap the value in stray punctuation (e.g. Gemma's "，10" or "。8").
+    # Accept it only when exactly one number is present.
+    m = re.fullmatch(r"\D*?(-?\d+(?:\.\d+)?)\D*", t)
+    return Decimal(m.group(1)) if m else None
+
+
+def format_number(d):
+    """Render a Decimal without trailing zeros ('18.00' -> '18')."""
+    d = parse_number(d)
+    if d is None:
+        return None
+    if d == d.to_integral_value():
+        return str(int(d))
+    return format(d.normalize(), "f")
+
+
+def numbers_equal(a, b, tol=Decimal("1e-6")):
+    a, b = parse_number(a), parse_number(b)
+    return a is not None and b is not None and abs(a - b) <= tol
+
+
+def extract_final_number(text):
+    """Best-effort final answer from free text.
+
+    Prefers an explicit 'answer is X' / '#### X' / bold **X** statement; falls back to
+    the last number in the text. Returns a Decimal or None.
+    """
+    if not text:
+        return None
+    for pat in (r"####\s*(" + _NUM_RE.pattern + ")",
+                r"answer\s*(?:is|:|=|remains|should be|would be)\s*\**\s*(" + _NUM_RE.pattern + ")",
+                r"\*\*\s*(" + _NUM_RE.pattern + r")\s*\**"):
+        hits = re.findall(pat, text, flags=re.I)
+        if hits:
+            return parse_number(hits[-1])
+    nums = _NUM_RE.findall(text)
+    return parse_number(nums[-1]) if nums else None
